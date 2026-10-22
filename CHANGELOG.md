@@ -7,6 +7,10 @@ workflow (or `npm version`) turns that section into the release's own (scripts/c
 
 ## Unreleased
 
+Nothing yet.
+
+## 0.1.1 - 2026-10-22
+
 The first release of Cinemesh: watch a video from your own computer with friends, in sync, peer-to-peer.
 
 ### Added
