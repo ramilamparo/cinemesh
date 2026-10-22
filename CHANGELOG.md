@@ -2,8 +2,8 @@
 
 All notable changes to Cinemesh are listed here, newest first. Versions follow
 [Semantic Versioning](https://semver.org); see [docs/RELEASING.md](docs/RELEASING.md#versioning) for what counts as
-a major, minor or patch change and how a release is cut. Write new entries under **Unreleased**; `npm version`
-turns that section into the release's own (scripts/changelog.mjs).
+a major, minor or patch change and how a release is cut. Write new entries under **Unreleased**; the Release
+workflow (or `npm version`) turns that section into the release's own (scripts/changelog.mjs).
 
 ## Unreleased
 

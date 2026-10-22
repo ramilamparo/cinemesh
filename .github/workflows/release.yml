@@ -1,57 +1,140 @@
-# Release (plan §4.6 "Signing" and "CI"). For a v* tag that matches package.json's version:
-#   1. run the whole CI workflow, which builds, checks and smoke-launches every package (ci.yml, workflow_call);
-#   2. attach the packages (each named with the version) to a DRAFT GitHub release titled "Cinemesh <version>",
-#      with that version's CHANGELOG.md section as its notes, with SHA256SUMS and the mpv source tarball that
-#      resources/licenses/mpv/SOURCE-OFFER.md promises. With the MINISIGN_SECRET_KEY secret set (an unencrypted key
-#      from `minisign -G -W`), SHA256SUMS is also signed (SHA256SUMS.minisig).
-# Publishing the draft stays a manual step. The builds are unsigned (ad-hoc on macOS): docs/install.md.
+# Release (docs/RELEASING.md "Cutting a release"). Start it from Actions → Release → Run workflow on main, choosing
+# patch, minor or major (or an exact version). It then:
+#   1. prepare: bumps package.json and package-lock.json (`npm version`), moves CHANGELOG.md's Unreleased notes under
+#      the new version (scripts/changelog.mjs), commits "Release <version>" to main and tags v<version>;
+#   2. ci: runs the whole CI workflow on that tag (ci.yml, workflow_call), which builds, checks and smoke-launches
+#      every package, named with the version;
+#   3. release: publishes the GitHub release "Cinemesh <version>" (marked latest, or pre-release for a version like
+#      1.2.0-beta.1) with the packages, SHA256SUMS and the mpv source tarball that
+#      resources/licenses/mpv/SOURCE-OFFER.md promises; its notes are the version's CHANGELOG section and a download
+#      table. With the MINISIGN_SECRET_KEY secret set (an unencrypted key from `minisign -G -W`), SHA256SUMS is also
+#      signed (SHA256SUMS.minisig).
+# Dry run: builds every package with the next version and prints the notes, but pushes nothing and publishes nothing.
+# A v* tag pushed by hand (after `npm version` locally) releases too: steps 2 and 3, once the tag is checked against
+# package.json and CHANGELOG.md. The builds are unsigned (ad-hoc on macOS): docs/install.md.
 name: Release
 
 on:
+  workflow_dispatch:
+    inputs:
+      bump:
+        description: Which part of the version to raise
+        type: choice
+        options: [patch, minor, major]
+        default: patch
+      version:
+        description: Or an exact version (e.g. 0.2.0 or 0.2.0-beta.1); overrides the choice above
+        type: string
+        default: ''
+      dry-run:
+        description: Dry run (build and show the notes; push and publish nothing)
+        type: boolean
+        default: false
   push:
     tags: ['v*']
 
 permissions:
   contents: read
 
+# One release at a time; a second one waits instead of racing for the next version number.
+concurrency:
+  group: release
+  cancel-in-progress: false
+
 jobs:
-  version:
-    name: tag matches package.json
+  prepare:
+    name: version and tag
     runs-on: ubuntu-24.04
-    timeout-minutes: 5
+    timeout-minutes: 10
+    permissions:
+      contents: write
+    outputs:
+      version: ${{ steps.out.outputs.version }}
+      tag: ${{ steps.out.outputs.tag }}
+      ref: ${{ steps.out.outputs.ref }}
+      dry-run: ${{ steps.out.outputs.dry-run }}
     steps:
       - uses: actions/checkout@v7
-      - name: Compare the tag with package.json
+        with:
+          # all history and tags: npm version refuses a tag that already exists
+          fetch-depth: 0
+      - uses: actions/setup-node@v7
+        with:
+          node-version: '24'
+      - name: Bump the version, the changelog, commit and tag (Run workflow)
+        if: github.event_name == 'workflow_dispatch'
         env:
-          TAG: ${{ github.ref_name }}
+          BUMP: ${{ inputs.version || inputs.bump }}
+          DRY_RUN: ${{ inputs.dry-run }}
         run: |
-          version=$(node -p 'require("./package.json").version')
-          if [ "$TAG" != "v$version" ]; then
-            echo "::error::tag $TAG does not match package.json version $version"
+          if [ "$GITHUB_REF" != refs/heads/main ] && [ "$DRY_RUN" != true ]; then
+            echo "::error::release from main (this run is on $GITHUB_REF); a dry run works on any branch"
             exit 1
           fi
-      - name: CHANGELOG.md has a section for this version
-        run: node scripts/changelog.mjs notes "$TAG" > /dev/null
+          git config user.name 'github-actions[bot]'
+          git config user.email '41898282+github-actions[bot]@users.noreply.github.com'
+          # Runs the `version` script (scripts/changelog.mjs release), which fails on an empty Unreleased section.
+          # --allow-same-version: the first release can be the version package.json already has (0.1.0).
+          npm version "$BUMP" --allow-same-version -m 'Release %s'
+          if [ "$DRY_RUN" != true ]; then
+            git push origin HEAD:main
+            git push origin "v$(node -p 'require("./package.json").version')"
+          fi
+      - name: Check the tag against package.json and CHANGELOG.md (pushed tag)
+        if: github.event_name == 'push'
+        run: |
+          version=$(node -p 'require("./package.json").version')
+          if [ "$GITHUB_REF_NAME" != "v$version" ]; then
+            echo "::error::tag $GITHUB_REF_NAME does not match package.json version $version"
+            exit 1
+          fi
+      - name: Outputs and release notes
+        id: out
         env:
-          TAG: ${{ github.ref_name }}
+          DRY_RUN: ${{ github.event_name == 'workflow_dispatch' && inputs.dry-run }}
+        run: |
+          version=$(node -p 'require("./package.json").version')
+          {
+            echo "version=$version"
+            echo "tag=v$version"
+            # A dry run pushed nothing: CI builds this run's commit, with the new version.
+            if [ "$DRY_RUN" = true ]; then echo "ref=$GITHUB_SHA"; else echo "ref=v$version"; fi
+            echo "dry-run=$DRY_RUN"
+          } >> "$GITHUB_OUTPUT"
+          mkdir -p notes
+          node scripts/changelog.mjs notes "$version" > notes/changes.md
+          echo "Cinemesh $version" && cat notes/changes.md
+      - uses: actions/upload-artifact@v7
+        with:
+          name: release-notes
+          path: notes/changes.md
+          if-no-files-found: error
+          retention-days: 7
 
   ci:
-    needs: version
+    needs: prepare
     uses: ./.github/workflows/ci.yml
+    with:
+      ref: ${{ needs.prepare.outputs.ref }}
+      version: ${{ needs.prepare.outputs.version }}
     permissions:
       contents: read
 
   release:
-    name: draft release
-    needs: ci
+    name: publish
+    needs: [prepare, ci]
     runs-on: ubuntu-24.04
     timeout-minutes: 20
     permissions:
       contents: write
     env:
-      TAG: ${{ github.ref_name }}
+      VERSION: ${{ needs.prepare.outputs.version }}
+      TAG: ${{ needs.prepare.outputs.tag }}
+      DRY_RUN: ${{ needs.prepare.outputs.dry-run }}
     steps:
       - uses: actions/checkout@v7
+        with:
+          ref: ${{ needs.prepare.outputs.ref }}
       - uses: actions/setup-node@v7
         with:
           node-version: '24'
@@ -60,6 +143,10 @@ jobs:
           pattern: package-*
           path: dist
           merge-multiple: true
+      - uses: actions/download-artifact@v8
+        with:
+          name: release-notes
+          path: ${{ runner.temp }}
       - name: Flatten the artifacts (upload-artifact keeps release/<version>/ below the wildcard)
         run: |
           find dist -mindepth 2 -type f -exec mv -n -t dist -- {} +
@@ -76,11 +163,10 @@ jobs:
             if [ -e "$f" ]; then mv -- "$f" "${f// /-}"; fi
           done
           # Every package carries the release's version in its name (the mpv tarball carries mpv's).
-          v="${TAG#v}"
           for f in *; do
             case "$f" in
-              mpv-*.tar.gz | *"$v"*) ;;
-              *) echo "::error::$f does not name version $v"; exit 1 ;;
+              mpv-*.tar.gz | *"$VERSION"*) ;;
+              *) echo "::error::$f does not name version $VERSION"; exit 1 ;;
             esac
           done
           sha256sum -- * > SHA256SUMS
@@ -103,10 +189,9 @@ jobs:
           rm -f "$key"
       - name: Release notes
         env:
-          INSTALL_DOC: ${{ github.server_url }}/${{ github.repository }}/blob/${{ github.ref_name }}/docs/install.md
+          INSTALL_DOC: ${{ github.server_url }}/${{ github.repository }}/blob/${{ needs.prepare.outputs.ref }}/docs/install.md
         run: |
-          v="${TAG#v}"
-          node scripts/changelog.mjs notes "$TAG" > "$RUNNER_TEMP/changes.md"
+          v="$VERSION"
           cat > "$RUNNER_TEMP/notes.md" <<EOF
           $(cat "$RUNNER_TEMP/changes.md")
 
@@ -131,9 +216,23 @@ jobs:
           attached, \`minisign -Vm SHA256SUMS -P <public key>\` first).
           EOF
           cat "$RUNNER_TEMP/notes.md"
-      - name: Create the draft release
+          { echo "## Cinemesh $VERSION"; echo; cat "$RUNNER_TEMP/notes.md"; } >> "$GITHUB_STEP_SUMMARY"
+      - name: Publish the release
+        if: env.DRY_RUN != 'true'
         env:
           GH_TOKEN: ${{ github.token }}
         run: |
-          gh release create "$TAG" dist/* --draft --verify-tag \
-            --title "Cinemesh ${TAG#v}" --notes-file "$RUNNER_TEMP/notes.md"
+          # A version with a pre-release part (1.2.0-beta.1) is published as a pre-release, so the download link
+          # (releases/latest) keeps pointing at the last stable one.
+          case "$VERSION" in
+            *-*) kind=--prerelease ;;
+            *) kind=--latest ;;
+          esac
+          gh release create "$TAG" dist/* --verify-tag "$kind" \
+            --title "Cinemesh $VERSION" --notes-file "$RUNNER_TEMP/notes.md"
+      - name: Dry run
+        if: env.DRY_RUN == 'true'
+        working-directory: dist
+        run: |
+          echo "Dry run: would publish $TAG with:" && ls -la
+          { echo; echo "**Dry run:** nothing was pushed or published. Assets:"; echo; printf -- '- %s\n' *; } >> "$GITHUB_STEP_SUMMARY"

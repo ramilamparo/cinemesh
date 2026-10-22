@@ -5,7 +5,8 @@
 #   e2e          Playwright + Electron with the fake player on Ubuntu (Xvfb), Windows and macOS
 #   package      every installer, with the bundled mpv on Windows/macOS; scripts/check-package.mjs checks each
 #                package (addons unpacked, fuses, ldd, .desktop, codesign) and launches it with --selftest
-# release.yml runs this whole workflow for v* tags (workflow_call) and publishes the package job's artifacts.
+# release.yml runs this whole workflow on the release tag (workflow_call, with `ref` and `version`) and publishes the
+# package job's artifacts.
 name: CI
 
 on:
@@ -14,6 +15,15 @@ on:
   pull_request:
   workflow_dispatch:
   workflow_call:
+    inputs:
+      ref:
+        description: What to check out and build (release.yml passes the release tag); empty = the triggering commit
+        type: string
+        default: ''
+      version:
+        description: The version to build packages as (release.yml passes the release's); empty = from package.json
+        type: string
+        default: ''
 
 permissions:
   contents: read
@@ -34,6 +44,8 @@ jobs:
     timeout-minutes: 20
     steps:
       - uses: actions/checkout@v7
+        with:
+          ref: ${{ inputs.ref }}
       - uses: actions/setup-node@v7
         with:
           node-version: ${{ env.NODE_VERSION }}
@@ -66,6 +78,8 @@ jobs:
           pacman -Sy --noconfirm --needed archlinux-keyring
           pacman -Su --noconfirm --needed git mpv ffmpeg nftables
       - uses: actions/checkout@v7
+        with:
+          ref: ${{ inputs.ref }}
       - uses: actions/setup-node@v7
         with:
           node-version: ${{ env.NODE_VERSION }}
@@ -95,6 +109,8 @@ jobs:
             nixpkgs: nixos-25.05
     steps:
       - uses: actions/checkout@v7
+        with:
+          ref: ${{ inputs.ref }}
       - uses: actions/setup-node@v7
         with:
           node-version: ${{ env.NODE_VERSION }}
@@ -127,6 +143,8 @@ jobs:
       WT_FAKE_PLAYER: '1'
     steps:
       - uses: actions/checkout@v7
+        with:
+          ref: ${{ inputs.ref }}
       - uses: actions/setup-node@v7
         with:
           node-version: ${{ env.NODE_VERSION }}
@@ -179,6 +197,8 @@ jobs:
       CSC_FOR_PULL_REQUEST: 'true'
     steps:
       - uses: actions/checkout@v7
+        with:
+          ref: ${{ inputs.ref }}
       - uses: actions/setup-node@v7
         with:
           node-version: ${{ env.NODE_VERSION }}
@@ -194,12 +214,16 @@ jobs:
       - name: Bundled mpv (official v0.41.0 build, SHA-256 pinned)
         if: runner.os != 'Linux'
         run: node scripts/fetch-mpv.mjs --platform ${{ matrix.target }}
-      - name: Version (package.json's on a matching v* tag, as release.yml runs it, else <version>-dev.<run number>)
+      - name: Version (release.yml's, or package.json's on a matching v* tag, else <version>-dev.<run number>)
         id: version
         shell: bash
+        env:
+          RELEASE_VERSION: ${{ inputs.version }}
         run: |
           base=$(node -p 'require("./package.json").version')
-          if [ "$GITHUB_REF" = "refs/tags/v$base" ]; then v=$base; else v="$base-dev.$GITHUB_RUN_NUMBER"; fi
+          if [ -n "$RELEASE_VERSION" ]; then v=$RELEASE_VERSION
+          elif [ "$GITHUB_REF" = "refs/tags/v$base" ]; then v=$base
+          else v="$base-dev.$GITHUB_RUN_NUMBER"; fi
           echo "version=$v" >> "$GITHUB_OUTPUT"
       - run: npm run build
       - name: Package

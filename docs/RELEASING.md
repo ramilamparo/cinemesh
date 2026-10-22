@@ -37,11 +37,9 @@ not code bugs; they are decisions, accounts or legal work that the build cannot 
    - Generate one with `minisign -G -W` and store the secret key as the `MINISIGN_SECRET_KEY` secret.
    - Publish the public key where `docs/install.md` points.
 
-5. **Run CI once on GitHub.**
-   - `ci.yml` and `release.yml` pass actionlint and shellcheck, but have never run on real runners.
-   - Not yet exercised: the Windows NSIS install and uninstall (HKCU `cinemesh` registration), macOS ad-hoc
-     signing with `codesign --verify --deep --strict` on the app, zip and DMG, the Nix mpv 0.39/0.40 jobs, and the
-     Arch integration container.
+5. **Release workflow on GitHub.** CI has run green on GitHub (all 11 jobs, 2026-10-22), including the Windows
+   NSIS install and uninstall, macOS ad-hoc signing checks, the Nix mpv 0.39/0.40 jobs and the Arch integration
+   container. The Release workflow itself has only been tried as a dry run: watch the first real release.
 
 ## Worth deciding
 
@@ -75,18 +73,31 @@ Every build is named with its version, both in its file names and in the app (`a
 
 ### Cutting a release
 
-1. Under **Unreleased** in CHANGELOG.md, list what the release changes (Added, Changed, Fixed, Removed). Commit it.
-2. Bump the version:
+1. Under **Unreleased** in CHANGELOG.md, list what the release changes (Added, Changed, Fixed, Removed), and push
+   it to main.
+2. On GitHub: **Actions > Release > Run workflow** on `main`. Choose **patch**, **minor** or **major**, or type an
+   exact version (the first release: `0.1.0`, the version package.json already has; a pre-release such as
+   `0.2.0-beta.1`).
+3. The workflow does the rest, in about 40 minutes:
+   - **version and tag:** `npm version` bumps package.json and package-lock.json and runs
+     `scripts/changelog.mjs release`, which renames Unreleased to `<version> - <date>` and opens a new empty one. It
+     commits "Release <version>" to main as github-actions[bot] and tags `v<version>`. It fails, with nothing pushed,
+     if Unreleased is empty or the tag already exists.
+   - **CI** runs every suite on the tag and builds, checks and launches every package, named with the version.
+   - **publish:** the GitHub release "Cinemesh <version>" goes live with the packages, SHA256SUMS (signed when
+     `MINISIGN_SECRET_KEY` is set) and the mpv source tarball. Its notes are the changelog section and a download
+     table. A plain version becomes the **latest** release, which the app's download link (`releases/latest`)
+     points to. A version with a pre-release part is published as a pre-release, so the link stays on the last
+     stable one.
 
-   ```sh
-   npm version 0.2.0 -m "Release %s"   # or: npm version patch | minor | major
-   ```
+Tick **Dry run** to try it first: it builds every package with the next version and shows the notes in the run's
+summary, but pushes and publishes nothing.
 
-   This updates package.json and package-lock.json, then runs `scripts/changelog.mjs release`, which renames the
-   Unreleased section to `0.2.0 - <date>` and opens a new empty one. It then commits everything as "Release 0.2.0"
-   and tags `v0.2.0`. It stops before committing if Unreleased is empty. In that case, undo the bump with
-   `git checkout package.json package-lock.json`.
+If CI fails after the tag is pushed, nothing is published. Fix the cause and either re-run the failed jobs (same
+tag) or delete the tag (`git push origin :v<version>`) and revert the "Release" commit before trying again.
 
-3. Push the commit and the tag: `git push --follow-tags`.
-4. `release.yml` runs CI on the tag and drafts the GitHub release "Cinemesh 0.2.0". The draft's notes are the
-   changelog section followed by the download table. Check the draft, then publish it.
+Releasing from a terminal still works: `npm version <version> -m "Release %s"` and `git push --follow-tags` run the
+same checks, CI and publish steps from the pushed tag.
+
+Note: the workflow pushes to main with the built-in `GITHUB_TOKEN`. If main is ever protected against direct
+pushes, allow GitHub Actions to bypass the rule, or the version step fails.
