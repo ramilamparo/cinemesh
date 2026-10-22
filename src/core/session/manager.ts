@@ -621,9 +621,12 @@ export class SessionManager {
     this.rpc.emit('player', this.idlePlayerEvent())
   }
 
-  /** Before any session the player is not running; 'missing'/'tooOld' let the UI show MpvSetup. */
+  /**
+   * Before any session the player is not running; 'missing'/'tooOld' let the UI show MpvSetup. A fake player
+   * (WT_FAKE_PLAYER) needs no mpv, so it never sends the UI there: sessions would not use mpv anyway.
+   */
   private idlePlayerEvent(): PlayerEvent {
-    const status = this.mpv.binary ? 'absent' : (this.mpv.unavailable ?? 'missing')
+    const status = this.mpv.binary || this.deps.fakePlayer ? 'absent' : (this.mpv.unavailable ?? 'missing')
     return {
       status,
       version: this.mpvInfo.version,

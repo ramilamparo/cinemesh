@@ -326,11 +326,15 @@ describe.skipIf(!HAVE_FFMPEG)('session manager: core restarts, startup sweep, le
 
   it('fixing mpv while joining (no player yet) reaches the renderer at once', async () => {
     // a viewer that was never in the room joins the restarted host with the old invite
-    cleo = spawn('Cleo', root)
+    // no fake player: with one the window never shows MpvSetup, so there is nothing to fix
+    cleo = spawn('Cleo', root, { noPlayer: true })
     await cleo.client.request('session.join', { invite })
     await cleo.client.until('session', (s) => s.phase === 'confirm-join')
+    // the window is on MpvSetup
+    expect(cleo.client.last('player') ?? cleo.client.snapshot?.player).toMatchObject({ status: 'missing' })
     const players = cleo.client.all('player').length
-    cleo.manager.updateMpv(MPV_OK)
+    // nothing at that path: should a player start after all, it fails instead of playing
+    cleo.manager.updateMpv({ ...MPV_OK, path: join(cleo.dir, 'no-mpv') })
     expect(cleo.client.all('player').length).toBe(players + 1)
     expect(cleo.client.last('player')?.status).toBe('absent')
     expect(cleo.client.last('session')?.phase).toBe('confirm-join')

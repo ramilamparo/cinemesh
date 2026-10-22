@@ -64,7 +64,10 @@ jobs:
           echo "version=$v" >> "$GITHUB_OUTPUT"
           echo "Building Cinemesh $v from ${GITHUB_SHA::7}"
       - run: npm run build
-      - run: >-
+      - name: Package
+        # bash on every OS: PowerShell splits -c.extraMetadata.version=… into two arguments
+        shell: bash
+        run: >-
           npx electron-builder ${{ matrix.builder }} --publish never
           -c.extraMetadata.version=${{ steps.version.outputs.version }}
       - name: Check the package and launch it with --selftest (Linux)

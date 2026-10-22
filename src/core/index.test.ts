@@ -24,9 +24,10 @@ class HeadlessCore {
   private readonly exited: Promise<number | null>
   private stderr = ''
 
-  /** `nodeArgs`: options for node itself, before the entry */
-  constructor(nodeArgs: string[] = []) {
+  /** `nodeArgs`: options for node itself, before the entry; `fakePlayer: false` runs it as the app does, with mpv */
+  constructor(nodeArgs: string[] = [], opts: { fakePlayer?: boolean } = {}) {
     const env: NodeJS.ProcessEnv = { ...process.env, WT_FAKE_PLAYER: '1' }
+    if (opts.fakePlayer === false) delete env.WT_FAKE_PLAYER
     // what env-first.ts must provide by itself here (main's fork env is not involved)
     delete env.WS_NO_BUFFER_UTIL
     delete env.WS_NO_UTF_8_VALIDATE
@@ -164,7 +165,8 @@ describe('core entry (index.ts) over the stdio transport', () => {
       }, 'three answers')
       const snapshot = core.rpc.find((m) => m.t === 'snapshot')?.d
       expect(snapshot?.session?.phase).toBe('idle')
-      expect(snapshot?.player?.status).toBe('missing')
+      // no mpv in init, but the fake player needs none: Home, not MpvSetup
+      expect(snapshot?.player?.status).toBe('absent')
       const byId = new Map(answers.map((a) => [a.id, a]))
       expect(byId.get(1)).toMatchObject({ ok: true, v: [] })
       // the join reached its handler: it fails on the invite, not for want of a handler
@@ -175,6 +177,26 @@ describe('core entry (index.ts) over the stdio transport', () => {
     } finally {
       expect(await core.stop()).toBe(0)
     }
+  }, 60_000)
+
+  it('sends the window to MpvSetup when main found no mpv, but not with a fake player (WT_FAKE_PLAYER)', async () => {
+    const idlePlayer = async (fakePlayer: boolean): Promise<string | undefined> => {
+      const core = new HeadlessCore([], { fakePlayer })
+      try {
+        // main found no mpv (initFrame's default): how a user without it, and CI's e2e runners, start
+        const hello: Frame = { ch: 'rpc', m: { t: 'hello', v: 1 } }
+        core.send(initFrame(`mpv-${String(fakePlayer)}`), { ch: 'control', m: { type: 'renderer-port' } }, hello)
+        // core does come up either way: MpvSetup is a screen of a connected window
+        await core.until(() => core.control.find((m) => m.type === 'ready'), 'ready')
+        const snapshot = await core.until(() => core.rpc.find((m) => m.t === 'snapshot')?.d, 'the snapshot')
+        return snapshot.player?.status
+      } finally {
+        expect(await core.stop()).toBe(0)
+      }
+    }
+    const [real, fake] = await Promise.all([idlePlayer(false), idlePlayer(true)])
+    expect(real).toBe('missing')
+    expect(fake).toBe('absent')
   }, 60_000)
 
   it('starts once when init comes twice', async () => {

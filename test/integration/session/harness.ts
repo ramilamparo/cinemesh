@@ -7,6 +7,7 @@ import {
   type CoreEventName,
   type CoreEvents,
   type CoreMethod,
+  type CoreSnapshot,
   type CoreToRenderer,
   type ParamsOf,
   type ResultOf,
@@ -24,6 +25,8 @@ import { SessionManager } from '../../../src/core/session/manager.js'
 
 export class Client {
   readonly events: { e: CoreEventName; d: unknown }[] = []
+  /** what core sent on attach: the state before the first event */
+  snapshot: CoreSnapshot | null = null
   private nextId = 1
   private readonly pending = new Map<number, (m: Extract<CoreToRenderer, { t: 'res' }>) => void>()
   private deliver: (m: unknown) => void = () => undefined
@@ -81,7 +84,8 @@ export class Client {
 
   private onMessage(m: CoreToRenderer): void {
     if (m.t === 'evt') this.events.push({ e: m.e, d: m.d })
-    else if (m.t === 'res') {
+    else if (m.t === 'snapshot') this.snapshot = m.d
+    else {
       this.pending.get(m.id)?.(m)
       this.pending.delete(m.id)
     }
@@ -128,7 +132,7 @@ export function realMpv(): MpvInfo | null {
  * A fresh member, or (with `dir`) a restarted one reusing an earlier member's folders. `realMpv`: its player is
  * the installed mpv, headless (--vo=null --ao=null), instead of the fake player. `mpvArgs`: more arguments for
  * that mpv, e.g. `--input-ipc-server=<path>`, a second IPC endpoint for another client (the player's own
- * connection is fd://3 on Linux and macOS).
+ * connection is fd://3 on Linux and macOS). `noPlayer`: neither, as a user without mpv.
  */
 export function member(
   name: string,
@@ -138,6 +142,8 @@ export function member(
     settings?: Partial<Settings>
     resumeActive?: boolean
     realMpv?: boolean
+    /** neither mpv nor the fake player: a user without mpv, whose window shows MpvSetup */
+    noPlayer?: boolean
     mpvArgs?: readonly string[]
     /** how long a session start waits for the startup sweep and export search (default 10 s) */
     sweepWaitMs?: number
@@ -169,7 +175,7 @@ export function member(
     mpv: mpv ?? { path: null, kind: 'none', version: null, status: 'missing' },
     appVersion: '0.0.0-test',
     store: new RoomStore(join(dir, 'userData')),
-    fakePlayer: !mpv,
+    fakePlayer: !mpv && !opts.noPlayer,
     ...(mpv ? { mpvExtraArgs: ['--vo=null', '--ao=null', ...(opts.mpvArgs ?? [])] } : {}),
     ...(opts.resumeActive ? { resumeActive: true } : {}),
     ...(opts.sweepWaitMs !== undefined ? { sweepWaitMs: opts.sweepWaitMs } : {}),

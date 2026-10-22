@@ -57,7 +57,9 @@ jobs:
     container:
       image: archlinux:latest
       # The forced-relay test needs `unshare -rn` and nft (test/integration/net/relay.test.ts skips without them).
-      options: --privileged
+      # --init: a PID 1 that reaps orphans. The orphan tests (restart, host-crash) wait for a child whose parent died
+      # to exit; the runner's default PID 1 never reaps, so the exited child stays a zombie that still looks alive.
+      options: --privileged --init
     steps:
       - name: Install mpv, ffmpeg, nftables and git
         run: |
@@ -200,7 +202,10 @@ jobs:
           if [ "$GITHUB_REF" = "refs/tags/v$base" ]; then v=$base; else v="$base-dev.$GITHUB_RUN_NUMBER"; fi
           echo "version=$v" >> "$GITHUB_OUTPUT"
       - run: npm run build
-      - run: >-
+      - name: Package
+        # bash on every OS: PowerShell splits -c.extraMetadata.version=… into two arguments
+        shell: bash
+        run: >-
           npx electron-builder ${{ matrix.builder }} --publish never
           -c.extraMetadata.version=${{ steps.version.outputs.version }}
       - name: Check the packages and launch the app with --selftest (Linux)
