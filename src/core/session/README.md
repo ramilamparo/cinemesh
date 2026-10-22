@@ -7,22 +7,24 @@ dynamic import once init arrives, after `env-first.ts` (a bundle hoists static p
 and WebTorrent's `ws` must see that environment), and attaches renderer ports only after every request handler
 is registered, so a request sent at once (a cold start from an invite link) finds its handler.
 
-| File                | What                                                                                                             |
-| ------------------- | ---------------------------------------------------------------------------------------------------------------- |
-| `manager.ts`        | `SessionManager`: at most one session. Every renderer request is zod-validated here, then delegated              |
-| `base-session.ts`   | Shared by both roles: room events, player (through `PlayerHolder`), sync engine, peer views, OSC state, teardown |
-| `host-session.ts`   | Room + invite at once → index → hash → manifest/blobs → announce → seed → player/sync                            |
-| `viewer-session.ts` | Join → announce → blobs → JoinConfirm → download/stream server → player/sync. Resume reuses the journal          |
-| `sync-ports.ts`     | Adapters to sync's ports: Clock (`performance.now`), Player, Bus (and host presence), Datagram, Media, Transfer  |
-| `striping.ts`       | Bus message `transfer.links`: viewers report their bt lanes and blocked pieces, the host feeds its transfer      |
-| `timeline.ts`       | Piece states → seconds for the renderer `timeline` and the OSC `ranges`; 256-bucket coverage                     |
-| `peer-view.ts`      | Merges net, sync and transfer rows into `PeerView`                                                               |
-| `player-holder.ts`  | A swappable player: an mpv fixed mid-session replaces the controller without rewiring sync                       |
-| `player-like.ts`    | The player surface sessions use; `PlayerController` and `FakePlayer` both implement it                           |
-| `fake-player.ts`    | `WT_FAKE_PLAYER=1`: a clock-driven player for e2e tests and headless peers                                       |
-| `session-file.ts`   | `<userData>/wt/rooms/<id>/session.json`, written atomically: at once when asked (see Resume), else 2 s debounced |
-| `sweep.ts`          | Startup sweep of kept partial downloads: unused for 7 days, then least recently used over the cache cap          |
-| `common.ts`         | Session bus names (`session.announce`, …), the net log adapter, subtitle languages, playhead reason names        |
+| File                     | What                                                                                                             |
+| ------------------------ | ---------------------------------------------------------------------------------------------------------------- |
+| `manager.ts`             | `SessionManager`: at most one session. Every renderer request is zod-validated here, then delegated              |
+| `base-session.ts`        | Shared by both roles: room events, player (through `PlayerHolder`), sync engine, peer views, OSC state, teardown |
+| `host-session.ts`        | Room + invite at once → index → hash → manifest/blobs → announce → seed → player/sync                            |
+| `viewer-session.ts`      | Join → announce → blobs → JoinConfirm → download/stream server → player/sync. Resume reuses the journal          |
+| `sync-ports.ts`          | Adapters to sync's ports: Clock (`performance.now`), Player, Bus (and host presence), Datagram, Media, Transfer  |
+| `striping.ts`            | Bus message `transfer.links`: viewers report their bt lanes and blocked pieces, the host feeds its transfer      |
+| `hash-fails.ts`          | Host: viewers' hash failures (reported with `transfer.links`) → one notice and peer-list warnings                |
+| `timeline.ts`            | Piece states → seconds for the renderer `timeline` and the OSC `ranges`; 256-bucket coverage                     |
+| `peer-view.ts`           | Merges net, sync and transfer rows into `PeerView`, the warnings as entries with their numbers                   |
+| `peer-warning-toasts.ts` | Host: an OSC toast when a viewer's download turns too slow (120 s cooldown)                                      |
+| `player-holder.ts`       | A swappable player: an mpv fixed mid-session replaces the controller without rewiring sync                       |
+| `player-like.ts`         | The player surface sessions use; `PlayerController` and `FakePlayer` both implement it                           |
+| `fake-player.ts`         | `WT_FAKE_PLAYER=1`: a clock-driven player for e2e tests and headless peers                                       |
+| `session-file.ts`        | `<userData>/wt/rooms/<id>/session.json`, written atomically: at once when asked (see Resume), else 2 s debounced |
+| `sweep.ts`               | Startup sweep of kept partial downloads: unused for 7 days, then least recently used over the cache cap          |
+| `common.ts`              | Session bus names (`session.announce`, …), the net log adapter, subtitle languages, playhead reason names        |
 
 ### Startup
 
@@ -102,12 +104,16 @@ While preparing, `session.preparing {stage, pct}` goes out at most once a second
    Connecting…: `update-required` when it comes from a newer host (`v > 1`), else `bad-session` naming the
    field. A later readable announce then only posts `session.changed`.
 3. `Blobs.fetch` of the torrent and manifest. Both are verified (`crossCheck`) and then re-served. The session
-   event gains `media: {container, seekMode, fullDownload, interleave}` from the manifest.
+   event gains `media: {container, seekMode, fullDownload, interleave}` from the manifest. A resume knows its
+   folder, so it first looks for the manifest kept there (`cachedManifest`, below) and fetches it only when that
+   copy is missing or no longer the announced one.
 4. `confirm-join` with `joinInfo {name, size, dir, freeBytes, haveBytes}`.
 5. `session.confirmJoin(dir)` checks space, and refuses (`busy`) a folder where a cut-off save of this video is
    still pending (Saves a quit cut off, above).
 6. `joinAsViewer` into `<dir>/.wt-partial/<infoHash>`, with critical ranges set (open-critical, seek-critical
-   and the subtitle files).
+   and the subtitle files). The engine writes `meta.torrent` and the manifest (`manifest.bin`, plan §4.2 "Viewer
+   storage") there at every join, inside the start, so a `delete` leave (which waits for the start) never races
+   them. `save`, `delete` and the sweep handle the folder as a whole, so the manifest goes with it.
 7. `StreamServer.listen` and the `Playhead`; `reportTransferLinks` starts (striping, below) and runs until a
    leave or the room closing.
 8. Player and `SyncEngine(viewer)`: `setSource(streamUrl)`. A 1 Hz playhead `tick` runs while playing. When
@@ -130,7 +136,9 @@ While preparing, `session.preparing {stage, pct}` goes out at most once a second
   `session.json` is written before `HostSession.start` returns (a crash while hashing a big file stays resumable)
   and at every publish (every new seq); only the 5 s position updates while playing keep the 2 s debounce. Until
   preparing finishes it holds `infoHash: null` and `durationS: null` (nothing that reads host records uses them).
-- **Viewer:** joins the saved folder without asking, and the journal resumes the download.
+- **Viewer:** joins the saved folder without asking, and the journal resumes the download. The manifest comes from
+  `<saveDir>/.wt-partial/<announced infoHash>/manifest.bin` when it is a regular file of the announced size and
+  BLAKE2b hash (what `Blobs.fetch` would check), else by `blob.get` as on a join. The torrent is still fetched.
 
 ### Crash restart
 
@@ -239,6 +247,61 @@ a failing leave is logged, and the active-room marker is cleared either way.
   admitted members, `linked` kept to admitted members other than the sender, `urgent` to pieces of the torrent,
   duplicates dropped, and each sender rate-limited (a burst of 10, 10 a second). Each report replaces the last.
 
+### Hash failures
+
+Plan §4.2 "Source-change watchdog". The watchdog compares size and mtime, so a file rewritten in place with both kept,
+or a disk returning other bytes, gets past it, and the host goes on serving pieces that fail their hash at every
+viewer (WebTorrent refetches such a piece at once, from the same host).
+
+- **Viewers** count them per piece and in total (`TransferEngine.hashFailures()`, transfer README) and, once they
+  have any, add `hashFails: {total, worst}` to their `transfer.links` report (`worst`: at most 8 `[piece, failures]`,
+  most first). It is optional within `v: 1`: an older host's schema strips it.
+- **The host** (`HashFailWatch`, fed by `collectTransferLinks`; `worst` kept to pieces of the torrent, a report that
+  fails the schema dropped whole) warns once one viewer reports the same piece failing `SAME_PIECE_FAILS` (3) times,
+  or `VIEWERS_WITH_FAILS` (2) viewers report failures at all. One failure at one viewer can be a fluke and says
+  nothing. The warning is the notice `transfer.hash-fails` (once per session; it names a changed file or a failing
+  disk and asks to host the video again), and from then on a peer-list entry `{code: 'hash-fails', total}` (first
+  on the row; text in `shared/peer-warnings.ts`) for every viewer still reporting failures. A viewer that leaves
+  stops counting.
+- A member can claim failures it never had. That costs nothing but a false warning on the host's screen; the counts
+  never change what is served.
+
+### Peer-list warnings
+
+`PeerView.warnings` is a list of `PeerWarning` entries (`src/shared/peer-warnings.ts`), not text. `mergePeerViews`
+builds them: a member's sync codes with their numbers (`slow-download` gets the rates and, while the member plays,
+when its buffer runs out: buffered / (1 − rate/need), under an hour), then the session's own entries (hash
+failures). A member's own desync warning (`PeerSync.behindS`, from its `sync.status.behindS`) becomes `behind`.
+`slow-download` also gets the member's own download limit (`PeerSync.downLimitBps`, from `sync.status.downLimitBps`),
+which the text names while it is below 1.1 × need.
+One entry per code, in the order hash-fails, behind, slow-download, frame-drops. The renderer and the OSC take the
+words from `peerWarningText`.
+
+- A viewer's own row shows its own codes and rates, from its member's last `sync.status`. Other rows on a viewer
+  have none: it hears no one else's status.
+- **The host's OSC** (`PeerWarningToasts`, run in `emitPeers`): a toast "Sam: download too slow (…)" when
+  `slow-download` appears on another member's row. At most one a tick (the rest are dropped, not queued), and a
+  warning that comes back within 120 s of its toast stays quiet. Hash failures toast through their notice; the
+  host can do nothing about the others.
+
+### Behind the host (viewer)
+
+`desyncWarnMs` (Settings, live through `updateSettings`) goes to the viewer's sync engine; the host never warns
+itself. `syncOscState` shows the warning in mpv's status line ("3 s behind the host · Shift+R to resync", warn
+level, or "Resyncing with the host…") after any wait text, and sends `resync {shown}` for the bar's button. The
+OSC's `resync` intent (Shift+R, the button) and the request `playback.resync` (the manager refuses it for the host
+with `not-viewer`) both call `resync()`, local only; from the OSC, `in-sync`, `not-playing` and `not-ready` become
+toasts. `FakePlayer.stall(on)` is a test hook: paused-for-cache where it is until `stall(false)` or a seek.
+
+### Transfer limits
+
+`uploadLimitKBps` (both roles) and `downloadLimitKBps` (viewers; ADR 0010) are KiB/s, null = none
+(`src/shared/limits.ts` `limitBps`). `updateSettings` applies both live: `applyUploadLimit` is the role's own,
+and `applyDownloadLimit` is a no-op but on the viewer, which calls `TransferEngine.setDownloadLimit`. The viewer
+also passes the limit to `joinAsViewer` and sets it again after the start, as for the upload limit, so a change
+while the start runs is not lost. Its `TransferPortAdapter` reads the setting for every `sync.status`
+(`downLimitBps`), so the host's warning follows a change within a second.
+
 ## Tests
 
 ```sh
@@ -267,9 +330,17 @@ npx vitest run --project integration test/integration/session   # host + viewers
   the room meanwhile, and it then meets the playing room; a room ended mid-download stops it where the room was.
 - `viewer-join.test.ts`: the join path against a bare host: leaving or the room closing at each step,
   admission while the host prepares, JoinConfirm's `haveBytes`, a second Join click, an unreadable announce,
-  the host's file-gone notice, the blocked-reader hook and the striping reports.
+  the host's file-gone notice, the blocked-reader hook, the striping reports, and the upload and download limits
+  changed while the download starts (and the download limit again in the room).
+- `download-limit.test.ts`: three viewers of an upload-limited host, one with a download limit: its request gate
+  takes the setting, it receives no more than the gate allows over 8 s, the host sees the limit in its status,
+  lifting it live opens the gate and drops it from the status, and every viewer completes with dupFactor ≤ 1.5.
 - `viewer-data.test.ts`: a viewer's data on disk against a real host: `haveBytes` with an external subtitle,
-  segment writes that fail, a second leave while a `save` runs, a save that finds a segment gone.
+  segment writes that fail, a second leave while a `save` runs, a save that finds a segment gone, and the kept
+  manifest (resumes read it instead of fetching it, a copy that no longer matches is fetched and replaced, a save
+  takes it with the folder).
+- `hash-fails.test.ts`: the host's file rewritten in place with its mtime restored, after preparing: the viewer
+  counts the failures of that piece, and the host warns once, in a notice and on that viewer's peer row.
 - `viewer-room.test.ts`: the room goes away while the video plays (ended, or the viewer removed): sync stops
   and the player pauses where it is.
 - `manager.test.ts`, `export-resume.test.ts`, `export-finish.test.ts`: the manager's (Startup, Saves a quit cut

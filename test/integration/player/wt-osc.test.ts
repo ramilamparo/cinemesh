@@ -157,6 +157,7 @@ describe.skipIf(!HAVE_MPV || !HAVE_FFMPEG)('wt-osc.lua in mpv', () => {
     await toOsc('status', { text: 'Waiting for Bob…', level: 'warn' })
     await toOsc('toast', { text: 'Only the host can pause', ms: 500 })
     await toOsc('ended', { ended: true })
+    await toOsc('resync', { shown: true })
     await toOsc('hb', {})
     // malformed input is ignored with a warning
     await toOsc('ranges', 'not json')
@@ -172,6 +173,8 @@ describe.skipIf(!HAVE_MPV || !HAVE_FFMPEG)('wt-osc.lua in mpv', () => {
       await sleep(60)
     }
     await toOsc('ended', { ended: false })
+    await toOsc('resync', { shown: false })
+    await toOsc('resync', 'not json')
     await toOsc('status', { text: '' })
     await mpv.ipc.command(['keypress', 'SPACE'])
     await sleep(200)
@@ -202,6 +205,41 @@ describe.skipIf(!HAVE_MPV || !HAVE_FFMPEG)('wt-osc.lua in mpv', () => {
     await until(async () => !(await strip()))
     await toOsc('ranges', { dur: 10, done: group, loading: [], groupDone: [[0, 2]] })
     await until(strip)
+    expect(await oscErrors(logFile)).toEqual([])
+  })
+
+  it('a viewer behind the host: Shift+R and the bar button send resync; the host has neither', async () => {
+    const drawn = async (): Promise<string> =>
+      mpv.ipc.getProperty<string>('user-data/wt_osc/overlay').then(
+        (r) => r.value,
+        () => '',
+      )
+    intents.length = 0
+    await toOsc('perms', { isHost: false, canPlayPause: false, canSeek: false })
+    await mpv.ipc.command(['keypress', 'R'])
+    await until(() => intents.length === 1)
+    expect(intents[0]?.t).toBe('resync')
+
+    // the file is paused, so the bar stays up
+    await toOsc('resync', { shown: true })
+    await until(async () => (await drawn()).includes('Resync to live'))
+    // right of the time: fullscreen, volume, subs, audio, then this one (112 px) at the bar's 1280 x 720
+    await mpv.ipc.command(['mouse', 990, 720 - 20])
+    await sleep(50)
+    await mpv.ipc.command(['keydown', 'MBTN_LEFT'])
+    await mpv.ipc.command(['keyup', 'MBTN_LEFT'])
+    await until(() => intents.length === 2)
+    expect(intents[1]?.t).toBe('resync')
+    await toOsc('resync', { shown: false })
+    await until(async () => !(await drawn()).includes('Resync to live'))
+
+    await toOsc('perms', { isHost: true, canPlayPause: true, canSeek: true })
+    await toOsc('resync', { shown: true })
+    await mpv.ipc.command(['keypress', 'R'])
+    await sleep(300)
+    expect(intents).toHaveLength(2)
+    expect(await drawn()).not.toContain('Resync to live')
+    expect((await mpv.ipc.getProperty('pause')).value).toBe(true)
     expect(await oscErrors(logFile)).toEqual([])
   })
 })

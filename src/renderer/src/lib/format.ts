@@ -19,12 +19,8 @@ export function formatRate(bytesPerSec: number | null | undefined): string {
   return `${formatBytes(Math.max(0, bytesPerSec))}/s`
 }
 
-/** Network speeds are quoted in bits, the unit ISPs and speed tests use. */
-export function formatMbit(bytesPerSec: number | null | undefined): string {
-  if (bytesPerSec === null || bytesPerSec === undefined || !Number.isFinite(bytesPerSec)) return '?'
-  const mbit = (bytesPerSec * 8) / 1e6
-  return mbit >= 10 ? mbit.toFixed(0) : mbit.toFixed(1)
-}
+// Mbit/s: shared with core's peer warnings, so a rate reads the same in both
+export { formatMbit } from '../../../shared/peer-warnings'
 
 /** 0:07, 12:34, 1:02:03 */
 export function formatTime(seconds: number | null | undefined): string {

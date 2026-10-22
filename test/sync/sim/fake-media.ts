@@ -12,6 +12,8 @@ export interface MediaOpts {
   bitrateBps: number
   /** seconds already downloaded from 0 when the node joins */
   preloadS: number
+  /** the member's own download limit, bytes/s, as reported in sync.status (rateX is what it downloads at) */
+  downLimitBps: number | null
 }
 
 export const DEFAULT_MEDIA: MediaOpts = {
@@ -21,6 +23,7 @@ export const DEFAULT_MEDIA: MediaOpts = {
   firstByteMs: 300,
   bitrateBps: 1_000_000,
   preloadS: 0,
+  downLimitBps: null,
 }
 
 /**
@@ -115,6 +118,10 @@ export class FakeMedia implements MediaPort, TransferPort {
 
   diskFull(): boolean {
     return false
+  }
+
+  downLimitBps(): number | null {
+    return this.o.downLimitBps
   }
 
   private fetched(): [number, number] | null {

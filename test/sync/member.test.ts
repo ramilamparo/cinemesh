@@ -9,6 +9,7 @@
 //
 // Deterministic: a virtual clock and a scripted mpv.
 import { describe, expect, it } from 'vitest'
+import type { DesyncInfo } from '../../src/core/sync/desync.js'
 import { DRIFT } from '../../src/core/sync/drift.js'
 import { MEMBER, MemberController } from '../../src/core/sync/member.js'
 import type {
@@ -17,11 +18,12 @@ import type {
   PlayerEvents,
   PlayerPort,
   PlayerSnapshot,
+  PlayheadReason,
   PositionSample,
   TimerHandle,
   TransferPort,
 } from '../../src/core/sync/ports.js'
-import type { SyncState } from '../../src/core/sync/protocol.js'
+import { type SyncState, type SyncStatus, parseBusMessage } from '../../src/core/sync/protocol.js'
 
 class VirtualClock implements Clock {
   t = 0
@@ -90,8 +92,12 @@ class ScriptedMpv implements PlayerPort {
   private speed = 1
   private played = false
   private stale = false
+  /** stall(true): stopped for data mpv does not have (paused-for-cache) */
+  private stalled = false
   /** nothing is loaded until the first load's restart */
   private loaded = false
+  /** frame-drop-count plus decoder-frame-drop-count */
+  drops = 0
   readonly samples: number[] = []
   readonly seeks: number[] = []
   readonly unpauses: number[] = []
@@ -104,6 +110,21 @@ class ScriptedMpv implements PlayerPort {
 
   setSeekMs(ms: number): void {
     this.o.seekMs = ms
+  }
+
+  /** playback loses `s` seconds at once, as after a stall the member did not see */
+  slip(s: number): void {
+    this.base -= s
+  }
+
+  /** Playback stops where it is for data it does not have (paused-for-cache), until stall(false) or a seek. */
+  stall(on: boolean): void {
+    if (on === this.stalled) return
+    this.base = this.pos()
+    this.baseT = this.clock.t
+    this.stalled = on
+    this.moving = !on && !this.pausedReal && this.played
+    this.fire('buffering', on)
   }
 
   pos(): number {
@@ -123,7 +144,16 @@ class ScriptedMpv implements PlayerPort {
   seek(posS: number): void {
     this.seeks.push(posS)
     this.land(posS)
-    this.clock.setTimer(this.o.seekMs, () => this.fire('playbackRestart', undefined))
+    // the data is anywhere but where it stopped: playing again from the restart
+    const unstall = this.stalled
+    this.stalled = false
+    this.clock.setTimer(this.o.seekMs, () => {
+      if (unstall && !this.pausedReal) {
+        this.baseT = this.clock.t
+        this.moving = true
+      }
+      this.fire('playbackRestart', undefined)
+    })
   }
 
   setPaused(paused: boolean): void {
@@ -135,7 +165,7 @@ class ScriptedMpv implements PlayerPort {
     } else {
       this.unpauses.push(this.clock.t)
       this.clock.setTimer(this.o.startLatMs, () => {
-        if (this.pausedReal) return
+        if (this.pausedReal || this.stalled) return
         this.baseT = this.clock.t
         this.moving = true
         this.played = true
@@ -173,14 +203,14 @@ class ScriptedMpv implements PlayerPort {
       available: true,
       loaded: this.loaded,
       paused: this.pausedFlag,
-      pausedForCache: false,
+      pausedForCache: this.stalled,
       seeking: false,
       coreIdle: false,
       eof: false,
       timePosS: this.timePos(),
       speed: this.speed,
       spdif: false,
-      frameDrops: 0,
+      frameDrops: this.drops,
       frameS: 1 / (this.o.reportedFps ?? this.o.fps),
     }
   }
@@ -207,30 +237,57 @@ class ScriptedMpv implements PlayerPort {
   }
 }
 
-function mediaWith(bufferedS: number): MediaPort {
+/** The bitrate the file needs and the download's rate and ETA, read live: a test may change them. */
+interface Rates {
+  needBps: number
+  rateBps: number
+  etaToEofS: number | null
+  /** the member's own download limit; absent, the port has no downLimitBps (the host's) */
+  downLimitBps?: number | null
+}
+
+/** `bufferedS`: seconds buffered at any position, or a function a test changes; playhead calls go to `playheads`. */
+function mediaWith(
+  bufferedS: number | (() => number),
+  rates: Rates,
+  playheads: { posS: number; reason: PlayheadReason }[] = [],
+): MediaPort {
   return {
     durationS: () => 600,
     readiness: () => true,
-    bufferedAheadS: () => bufferedS,
-    needBps: () => 0,
-    playhead: { set: () => undefined },
+    bufferedAheadS: () => (typeof bufferedS === 'number' ? bufferedS : bufferedS()),
+    needBps: () => rates.needBps,
+    playhead: { set: (posS, reason) => playheads.push({ posS, reason }) },
     onChange: () => () => undefined,
   }
 }
-const transfer: TransferPort = { rateBps: () => 1e6, etaToEofS: () => 0, coverage: () => null, diskFull: () => false }
+const transferWith = (rates: Rates): TransferPort => ({
+  rateBps: () => rates.rateBps,
+  etaToEofS: () => rates.etaToEofS,
+  coverage: () => null,
+  diskFull: () => false,
+  ...('downLimitBps' in rates ? { downLimitBps: () => rates.downLimitBps ?? null } : {}),
+})
 
 /** A member on the host clock (θ̂ = 0), states applied by hand, the room's position computed from them. */
-function room(script: Partial<MpvScript> = {}, bufferedS = 600) {
+function room(
+  script: Partial<MpvScript> = {},
+  bufferedS: number | (() => number) = 600,
+  rates: Rates = { needBps: 0, rateBps: 1e6, etaToEofS: 0 },
+  opts: { desyncWarnMs?: number } = {},
+) {
   const clock = new VirtualClock()
   const mpv = new ScriptedMpv(clock, { ...SCRIPT, ...script })
+  const playheads: { posS: number; reason: PlayheadReason }[] = []
   const member = new MemberController({
     clock,
     player: mpv,
-    media: mediaWith(bufferedS),
-    transfer,
+    media: mediaWith(bufferedS, rates, playheads),
+    transfer: transferWith(rates),
     offset: () => 0,
     clockErrMs: () => 0,
     nudge: true,
+    ...opts,
   })
   member.start()
   let seq = 0
@@ -259,7 +316,9 @@ function room(script: Partial<MpvScript> = {}, bufferedS = 600) {
   }
   /** ms the member's mpv is ahead of the room */
   const ahead = (): number => (mpv.pos() - roomPos()) * 1000
-  return { clock, mpv, member, apply, roomPos, ahead }
+  const statuses: SyncStatus[] = []
+  member.on('status', (s) => statuses.push(s))
+  return { clock, mpv, member, apply, roomPos, ahead, statuses, playheads }
 }
 
 /**
@@ -453,5 +512,288 @@ describe('the start error (ADR 0008 §4.4)', () => {
     r.apply('playing', r.roomPos(), r.clock.t + 500)
     r.clock.advance(800)
     expect(Math.abs(r.ahead())).toBeLessThan(0.5)
+  })
+})
+
+describe('warnings in sync.status', () => {
+  const warned = (s: SyncStatus | undefined, code: SyncStatus['warnings'][number]): boolean =>
+    s?.warnings.includes(code) ?? false
+
+  it('slow download: on after 15 s below 1.1 × need, off only after 10 s above it', () => {
+    const rates: Rates = { needBps: 1_000_000, rateBps: 900_000, etaToEofS: 300 }
+    const r = room({}, 600, rates)
+    const last = (): SyncStatus | undefined => r.statuses.at(-1)
+    r.clock.advance(MEMBER.SLOW_RATE_MS - 1000)
+    expect(warned(last(), 'slow-download')).toBe(false)
+    r.clock.advance(2000)
+    expect(warned(last(), 'slow-download')).toBe(true)
+    // a rate wavering ±5 % around the threshold, a second each way: the warning holds
+    const edge = MEMBER.SLOW_RATE_FACTOR * rates.needBps
+    const from = r.statuses.length
+    for (let i = 0; i < 30; i++) {
+      rates.rateBps = i % 2 === 0 ? edge * 1.05 : edge * 0.95
+      r.clock.advance(1000)
+    }
+    expect(r.statuses.slice(from).every((s) => warned(s, 'slow-download'))).toBe(true)
+    // fast enough for good
+    rates.rateBps = edge * 1.2
+    r.clock.advance(MEMBER.SLOW_CLEAR_MS - 1000)
+    expect(warned(last(), 'slow-download')).toBe(true)
+    r.clock.advance(2000)
+    expect(warned(last(), 'slow-download')).toBe(false)
+    // a finished download clears it at once
+    rates.rateBps = 0
+    r.clock.advance(MEMBER.SLOW_RATE_MS + 1000)
+    expect(warned(last(), 'slow-download')).toBe(true)
+    rates.etaToEofS = 0
+    r.clock.advance(1000)
+    expect(warned(last(), 'slow-download')).toBe(false)
+  })
+
+  it("reports the member's own download limit while one is set, read live; the host parses what it sends", () => {
+    const rates: Rates = { needBps: 1_000_000, rateBps: 400_000, etaToEofS: 300, downLimitBps: 409_600 }
+    const r = room({}, 600, rates)
+    r.clock.advance(1500)
+    expect(r.statuses.at(-1)?.downLimitBps).toBe(409_600)
+    // a limited member still warns: the room will buffer because of it
+    r.clock.advance(MEMBER.SLOW_RATE_MS)
+    expect(r.statuses.at(-1)).toMatchObject({ warnings: ['slow-download'], downLimitBps: 409_600 })
+    rates.downLimitBps = null
+    r.clock.advance(1000)
+    expect(r.statuses.at(-1)).not.toHaveProperty('downLimitBps')
+    // a transfer port without it, as the host's
+    const host = room()
+    host.clock.advance(1500)
+    expect(host.statuses.at(-1)).not.toHaveProperty('downLimitBps')
+    for (const s of [...r.statuses, ...host.statuses]) expect(parseBusMessage(s)).toEqual(s)
+  })
+
+  /** Plays from 0; returns the room after `ms` of playing. */
+  const playing = (ms: number) => {
+    const r = room()
+    r.apply('paused', 0)
+    r.member.setSource('file')
+    r.clock.advance(1000)
+    r.apply('playing', 0, r.clock.t + 500)
+    r.clock.advance(500 + ms)
+    return r
+  }
+
+  it('frame drops: counted while playing', () => {
+    const r = playing(5000)
+    expect(warned(r.statuses.at(-1), 'frame-drops')).toBe(false)
+    r.mpv.drops += 20
+    r.clock.advance(1000)
+    expect(warned(r.statuses.at(-1), 'frame-drops')).toBe(true)
+  })
+
+  it('frame drops: not those of a catch-up skip', () => {
+    const r = playing(5000)
+    const seek = r.mpv.seek.bind(r.mpv)
+    // mpv drops frames as it restarts after the seek
+    r.mpv.seek = (posS) => {
+      seek(posS)
+      r.clock.setTimer(300, () => (r.mpv.drops += 20))
+    }
+    // mpv falls 2 s behind the room: the drift loop skips forward
+    const seeks = r.mpv.seeks.length
+    r.mpv.slip(2)
+    r.clock.advance(3000)
+    expect(r.mpv.seeks.length).toBe(seeks + 1)
+    expect(r.mpv.drops).toBe(20)
+    const from = r.statuses.length
+    r.clock.advance(MEMBER.FRAME_DROP_WINDOW_MS + 2000)
+    expect(r.statuses.length - from).toBeGreaterThan(10)
+    expect(r.statuses.slice(from).some((s) => warned(s, 'frame-drops'))).toBe(false)
+    expect(Math.abs(r.ahead())).toBeLessThan(100)
+  })
+})
+
+describe('the desync warning and Resync to live', () => {
+  const T = 1000
+
+  /** Plays from 0 for 5 s with the warning at `desyncWarnMs`; `buffered` says what is buffered at any position. */
+  const playing = (opts: { desyncWarnMs?: number; buffered?: () => number } = {}) => {
+    const r = room({}, opts.buffered ?? 600, undefined, { desyncWarnMs: opts.desyncWarnMs ?? T })
+    const desync: { t: number; d: DesyncInfo | null }[] = []
+    r.member.on('desync', (d) => desync.push({ t: r.clock.t, d }))
+    r.apply('paused', 0)
+    r.member.setSource('file')
+    r.clock.advance(1000)
+    r.apply('playing', 0, r.clock.t + 500)
+    r.clock.advance(5500)
+    expect(Math.abs(r.ahead())).toBeLessThan(DRIFT.ON)
+    return { ...r, desync }
+  }
+  const behindAt = (x: ReturnType<typeof playing>): number | undefined =>
+    x.desync.find((e) => e.d?.state === 'behind')?.t
+
+  it('a stall in a playing room shows behind about 3 s in (1 s to the threshold, then 2 s), growing by 0.5 s', () => {
+    const r = playing()
+    const t0 = r.clock.t
+    r.mpv.stall(true)
+    r.clock.advance(6000)
+    const at = behindAt(r) ?? NaN
+    expect(at - t0).toBeGreaterThanOrEqual(3000)
+    expect(at - t0).toBeLessThanOrEqual(3500)
+    const numbers = r.desync.flatMap((e) => (e.d?.state === 'behind' ? [e.d.behindS] : []))
+    expect(numbers[0]).toBeGreaterThanOrEqual(3)
+    expect(numbers.every((n, i) => i === 0 || n - (numbers[i - 1] ?? 0) === 0.5)).toBe(true)
+    expect(numbers.at(-1)).toBeGreaterThanOrEqual(5.5)
+    expect(numbers.at(-1)).toBeLessThanOrEqual(6)
+    // the host hears it in sync.status, once a second
+    expect(r.statuses.at(-1)?.behindS).toBeGreaterThanOrEqual(5)
+    expect(r.member.desyncState).toEqual(r.desync.at(-1)?.d)
+  })
+
+  it('Resync in a stall without the data at the room: rendezvous further ahead, paused, then in sync', () => {
+    let buffered = 600
+    const r = playing({ buffered: () => buffered })
+    r.mpv.stall(true)
+    r.clock.advance(4000)
+    expect(r.member.desyncState?.state).toBe('behind')
+    buffered = 0
+    const seeks = r.mpv.seeks.length
+    const room = r.roomPos()
+    expect(r.member.resync()).toBe('rendezvous')
+    expect(r.mpv.seeks.length).toBe(seeks + 1)
+    // estReady (its 6 s prior) ahead of the room, where the download goes too
+    expect(r.mpv.seeks.at(-1)).toBeCloseTo(room + MEMBER.EST_READY_INIT_MS / 1000, 2)
+    expect(r.playheads.at(-1)).toEqual({ posS: r.mpv.seeks.at(-1), reason: 'rendezvous' })
+    expect(r.member.desyncState).toEqual({ state: 'catching-up' })
+    r.clock.advance(1)
+    expect(r.mpv.snapshot().paused).toBe(true)
+    buffered = 600
+    r.clock.advance(MEMBER.EST_READY_INIT_MS + 1000)
+    expect(r.mpv.snapshot().paused).toBe(false)
+    expect(Math.abs(r.ahead())).toBeLessThan(100)
+    expect(r.member.desyncState).toBeNull()
+    // never 'behind' again on the way: catching-up straight to in sync
+    const since = r.desync.findIndex((e) => e.d?.state === 'catching-up')
+    expect(r.desync.slice(since).map((e) => e.d?.state ?? null)).toEqual(['catching-up', null])
+  })
+
+  it('Resync behind with the data at the room: a skip to it, without pausing', () => {
+    const r = playing()
+    r.mpv.slip(3)
+    r.clock.advance(300)
+    const seeks = r.mpv.seeks.length
+    const target = r.roomPos() + r.member.drift.seekLatMs / 1000
+    expect(r.member.resync()).toBe('skip')
+    expect(r.mpv.seeks.length).toBe(seeks + 1)
+    expect(r.mpv.seeks.at(-1)).toBeCloseTo(target, 2)
+    expect(r.playheads.at(-1)?.reason).toBe('catchup')
+    r.clock.advance(1)
+    expect(r.mpv.snapshot().paused).toBe(false)
+    r.clock.advance(1000)
+    // it skipped to where the room is a seek later (this mpv seeks faster than the 150 ms prior)
+    expect(Math.abs(r.ahead())).toBeLessThan(200)
+  })
+
+  it('answers busy while a catch-up is on its way, and for 2 s after the last Resync, doing nothing', () => {
+    const r = playing()
+    r.mpv.slip(3)
+    r.clock.advance(300)
+    expect(r.member.resync()).toBe('skip')
+    const seeks = r.mpv.seeks.length
+    expect(r.member.resync()).toBe('busy') // the skip is on its way
+    r.clock.advance(500)
+    r.mpv.slip(3)
+    r.clock.advance(300)
+    expect(r.member.resync()).toBe('busy') // landed, but the last Resync was 0.8 s ago
+    expect(r.mpv.seeks.length).toBe(seeks)
+    expect(r.mpv.snapshot().paused).toBe(false)
+  })
+
+  it('answers in-sync within 300 ms, a stall’s first moments included, and leaves the player alone', () => {
+    const r = playing()
+    const seeks = r.mpv.seeks.length
+    const unpauses = r.mpv.unpauses.length
+    expect(r.member.resync()).toBe('in-sync')
+    r.mpv.stall(true)
+    r.clock.advance(250)
+    expect(r.member.currentPhase).toBe('buffering')
+    expect(r.member.resync()).toBe('in-sync')
+    expect(r.mpv.seeks.length).toBe(seeks)
+    expect(r.mpv.unpauses.length).toBe(unpauses)
+    expect(r.mpv.snapshot().paused).toBe(false)
+  })
+
+  it('ahead of the room: waits paused for it, then plays on in sync', () => {
+    const r = playing()
+    r.mpv.slip(-1)
+    r.clock.advance(300)
+    const seeks = r.mpv.seeks.length
+    expect(r.member.resync()).toBe('wait')
+    r.clock.advance(1)
+    expect(r.mpv.snapshot().paused).toBe(true)
+    expect(r.member.desyncState).toEqual({ state: 'catching-up' })
+    r.clock.advance(1500)
+    expect(r.mpv.snapshot().paused).toBe(false)
+    expect(Math.abs(r.ahead())).toBeLessThan(100)
+    expect(r.mpv.seeks.length).toBe(seeks)
+    expect(r.member.desyncState).toBeNull()
+  })
+
+  it('answers not-playing for a room that does not play or a host that is gone, and not-ready while loading', () => {
+    const r = playing()
+    r.apply('paused', r.roomPos())
+    r.clock.advance(500)
+    const seeks = r.mpv.seeks.length
+    expect(r.member.resync()).toBe('not-playing')
+    r.apply('playing', r.roomPos(), r.clock.t + 300)
+    r.clock.advance(2000)
+    r.member.hostLeft()
+    expect(r.member.resync()).toBe('not-playing')
+    expect(r.mpv.seeks.length).toBe(seeks)
+    expect(r.mpv.snapshot().paused).toBe(false)
+
+    const loading = room({}, 600, undefined, { desyncWarnMs: T })
+    loading.apply('playing', 0)
+    loading.member.setSource('file') // the load is out; its restart comes 100 ms later
+    expect(loading.member.resync()).toBe('not-ready')
+  })
+
+  it('off (0, as for the host): never warns, however long the stall', () => {
+    const r = playing({ desyncWarnMs: 0 })
+    r.mpv.stall(true)
+    r.clock.advance(20_000)
+    expect(r.desync).toEqual([])
+    expect(r.statuses.some((s) => s.behindS !== undefined)).toBe(false)
+  })
+
+  it('clears at once for a newly applied state, and after a θ̂ jump counts its 2 s afresh', () => {
+    const r = playing()
+    r.mpv.stall(true)
+    r.clock.advance(4000)
+    expect(r.member.desyncState?.state).toBe('behind')
+    r.apply('playing', r.roomPos()) // the room seeks
+    expect(r.member.desyncState).toBeNull()
+
+    const q = playing()
+    const t0 = q.clock.t
+    q.mpv.stall(true)
+    q.clock.advance(2500) // 1.5 s past the threshold
+    q.member.onOffset(true)
+    q.clock.advance(3000)
+    const at = behindAt(q) ?? NaN
+    expect(at - t0).toBeGreaterThanOrEqual(4500)
+    expect(at - t0).toBeLessThanOrEqual(5000)
+  })
+
+  it('a new setting applies at once: 0 hides the warning, a higher threshold hides a smaller lag', () => {
+    const r = playing()
+    r.mpv.stall(true)
+    r.clock.advance(4000)
+    expect(r.member.desyncState?.state).toBe('behind')
+    r.member.setDesyncWarn(0)
+    expect(r.desync.at(-1)?.d).toBeNull()
+    r.member.setDesyncWarn(T)
+    r.clock.advance(2500)
+    expect(r.member.desyncState?.state).toBe('behind')
+    r.member.setDesyncWarn(30_000) // the lag is about 6.5 s
+    expect(r.member.desyncState).toBeNull()
+    r.clock.advance(3000)
+    expect(r.member.desyncState).toBeNull()
   })
 })

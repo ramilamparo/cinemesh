@@ -840,6 +840,12 @@ export class SessionManager {
           ])
           .parse(raw),
     )
+    // local to this viewer: no permission, nothing published (MemberController.resync)
+    r.handle(
+      'playback.resync',
+      () => ({ outcome: this.viewer().resync() }),
+      (raw) => empty.parse(raw),
+    )
 
     // ---- player (local only) ----
     const player = () => {

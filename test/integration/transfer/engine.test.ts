@@ -9,6 +9,7 @@ import {
   readFileSync,
   renameSync,
   rmSync,
+  statSync,
   utimesSync,
   writeFileSync,
   writeSync,
@@ -20,7 +21,7 @@ import parseTorrent from 'parse-torrent'
 import Protomux from 'protomux'
 import WebTorrent, { type Wire } from 'webtorrent'
 import { afterAll, describe, expect, it, vi } from 'vitest'
-import { TransferEngine } from '../../../src/core/transfer/engine.js'
+import { MANIFEST_FILE, TransferEngine, type TransferStats } from '../../../src/core/transfer/engine.js'
 import { prepareHost } from '../../../src/core/transfer/host-prepare.js'
 import { Journal } from '../../../src/core/transfer/journal.js'
 import { BT_PROTOCOL, MuxWireStream } from '../../../src/core/transfer/mux-wire-stream.js'
@@ -296,8 +297,8 @@ describe('TransferEngine resume', () => {
 describe('TransferEngine host source watchdog', () => {
   async function hostOfCopy(
     name: string,
-    opts: { subtitle?: boolean } = {},
-  ): Promise<{ host: TransferEngine; path: string; subPath: string }> {
+    opts: { subtitle?: boolean; uploadLimitKBps?: number } = {},
+  ): Promise<{ host: TransferEngine; path: string; subPath: string; torrent: Buffer }> {
     const path = join(dir, `${name}.mkv`)
     const subPath = join(dir, `${name}.srt`)
     copyFileSync(join(dir, 'film.mkv'), path)
@@ -309,8 +310,8 @@ describe('TransferEngine host source watchdog', () => {
       pieceLength: P,
     })
     const host = new TransferEngine()
-    await host.startHost(prepared, { uploadLimitKBps: null })
-    return { host, path, subPath }
+    await host.startHost(prepared, { uploadLimitKBps: opts.uploadLimitKBps ?? null })
+    return { host, path, subPath, torrent: prepared.torrent }
   }
   const check = (host: TransferEngine): Promise<void> =>
     (host as unknown as { checkSource(): Promise<void> }).checkSource()
@@ -352,6 +353,94 @@ describe('TransferEngine host source watchdog', () => {
     const internal = host as unknown as { torrent: { destroyed: boolean } }
     expect(internal.torrent.destroyed).toBe(true) // the last piece no longer matches its hash: never served again
     await host.destroy()
+  })
+
+  it('misses a piece rewritten with its size and mtime kept; the viewer counts the failed hash checks of it', async () => {
+    // Limited: the upload scheduler then releases requests on its timer. Unlimited, over this in-memory link, the
+    // fetch-fail-refetch loop of the bad piece never leaves the microtask queue, and no timer (the test's) runs again.
+    const { host, path, torrent } = await hostOfCopy('rewritten', { uploadLimitKBps: 4096 })
+    const kinds: string[] = []
+    host.on('source-changed', (c) => kinds.push(c.kind))
+    // a disk returning other bytes, or a tool that restores the date: piece 5 differs, the watchdog sees nothing
+    const before = statSync(path)
+    const fd = openSync(path, 'r+')
+    writeSync(fd, randomBytes(4096), 0, 4096, 5 * P + 100)
+    closeSync(fd)
+    utimesSync(path, before.atime, before.mtime)
+    await check(host)
+    expect(kinds).toEqual([])
+
+    const net = link()
+    const v = new TransferEngine()
+    const manifest = Buffer.from('the session manifest')
+    await v.joinAsViewer({ torrent, manifest, dir: join(dir, 'transfer-rewritten'), uploadLimitKBps: null })
+    expect(readFileSync(join(dir, 'transfer-rewritten', MANIFEST_FILE)).equals(manifest)).toBe(true)
+    host.attach({ id: 'viewer', publicKey: VIEWER_KEY, mux: net.hostMux })
+    v.attach({ id: 'host', publicKey: HOST_KEY, mux: net.viewerMux })
+    const verified = new Set<number>()
+    v.on('verified', (i) => verified.add(i))
+    v.setPlayhead({ byte: 4 * P, windowBytes: 4 * P, hotBytes: P, seek: true })
+    const stats = (e: TransferEngine): TransferStats => (e as unknown as { stats(): TransferStats }).stats()
+    const end = Date.now() + 20_000
+    while ((v.hashFailures().worst[0]?.[1] ?? 0) < 3) {
+      if (Date.now() > end) throw new Error(`timed out: ${JSON.stringify(v.hashFailures())}`)
+      await sleep(50)
+    }
+    // only piece 5 fails, again and again: the host serves it the same each time
+    const fails = v.hashFailures()
+    expect(fails.worst.map(([i]) => i)).toEqual([5])
+    expect(fails.total).toBe(fails.worst[0]?.[1])
+    expect(stats(v).hashFails?.worst[0]?.[0]).toBe(5)
+    expect(stats(v).hashFails?.total).toBeGreaterThanOrEqual(3)
+    expect(verified.has(5)).toBe(false)
+    expect(verified.has(4)).toBe(true)
+    // the host has nothing to count
+    expect(stats(host).hashFails).toBeUndefined()
+    await v.leave({ data: 'delete' })
+    await host.destroy()
+    net.close()
+  })
+
+  it('a viewer at a download limit fetches a piece failing its hash check again at that limit; idle, its gate is open', async () => {
+    // limited host, as above; the viewer's limit is what binds
+    const { host, path, torrent } = await hostOfCopy('rewritten-limited', { uploadLimitKBps: 4096 })
+    const fd = openSync(path, 'r+')
+    writeSync(fd, randomBytes(4096), 0, 4096, 5 * P + 100)
+    closeSync(fd)
+    const net = link()
+    const v = new TransferEngine()
+    const rate = 256 * 1024
+    await v.joinAsViewer({
+      torrent,
+      dir: join(dir, 'transfer-rewritten-limited'),
+      uploadLimitKBps: null,
+      downloadLimitKBps: 256,
+    })
+    host.attach({ id: 'viewer', publicKey: VIEWER_KEY, mux: net.hostMux })
+    v.attach({ id: 'host', publicKey: HOST_KEY, mux: net.viewerMux })
+    const started = performance.now()
+    v.setPlayhead({ byte: 4 * P, windowBytes: 4 * P, hotBytes: P, seek: true })
+    const end = Date.now() + 20_000
+    while (v.hashFailures().total < 3) {
+      if (Date.now() > end) throw new Error(`timed out: ${JSON.stringify(v.hashFailures())}`)
+      await sleep(50)
+    }
+    const s = (performance.now() - started) / 1000
+    const inside = v as unknown as { torrent: { wires: Wire[] }; downloadGate: { allows(critical: boolean): boolean } }
+    const got = inside.torrent.wires.reduce((sum, w) => sum + w.downloaded, 0)
+    const summary = JSON.stringify({ s, got, fails: v.hashFailures() })
+    // piece 5 came three times (and piece 4 once), every time charged: no faster than the limit (+ depth + the hot
+    // window's borrowing)
+    expect(got, summary).toBeGreaterThanOrEqual(4 * P)
+    expect(got, summary).toBeLessThanOrEqual(rate * s + 64 * 1024 + rate + 16 * 1024)
+    // the lane goes: what was still asked for is refunded, and a second later the gate lets requests go
+    host.detach('viewer')
+    v.detach('host')
+    await sleep(1000)
+    expect(inside.downloadGate.allows(false), summary).toBe(true)
+    await v.leave({ data: 'delete' })
+    await host.destroy()
+    net.close()
   })
 
   it('reports nothing for a check that finishes after the engine was destroyed', async () => {
@@ -694,5 +783,141 @@ describe('TransferEngine re-attach', () => {
     expect(opens).toBeLessThanOrEqual(3)
     await e.destroy()
     net.close()
+  })
+})
+
+describe('TransferEngine download limit', () => {
+  const KiB = 1024
+  const BLOCK = 16 * KiB
+  /** the gate's depth and its debt cap for critical pieces: what may go above the rate (download-gate.ts) */
+  const burst = (rate: number): number => Math.max(64 * KiB, rate / 4) + Math.max(64 * KiB, rate)
+  type Inside = { torrent: { _requestGate: { rateBps: number | null } | null; wires: Wire[] } }
+  const inside = (e: TransferEngine): Inside => e as unknown as Inside
+  /** bytes of blocks a viewer received */
+  const received = (v: TransferEngine): number => inside(v).torrent.wires.reduce((sum, w) => sum + w.downloaded, 0)
+  const until = async (ok: () => boolean, ms: number, what: string): Promise<void> => {
+    const end = Date.now() + ms
+    while (!ok()) {
+      if (Date.now() > end) throw new Error(`timed out: ${what}`)
+      await sleep(20)
+    }
+  }
+  async function limited(
+    name: string,
+    downloadLimitKBps: number,
+  ): Promise<{ host: TransferEngine; v: TransferEngine; close: () => Promise<void> }> {
+    const { host, torrent } = await hostWith()
+    const net = link()
+    const v = new TransferEngine()
+    await v.joinAsViewer({ torrent, dir: join(dir, name), uploadLimitKBps: null, downloadLimitKBps })
+    host.attach({ id: 'viewer', publicKey: VIEWER_KEY, mux: net.hostMux })
+    v.attach({ id: 'host', publicKey: HOST_KEY, mux: net.viewerMux })
+    const close = async (): Promise<void> => {
+      await v.leave({ data: 'delete' })
+      await host.destroy()
+      net.close()
+    }
+    return { host, v, close }
+  }
+
+  it('holds a viewer to its limit by the requests it sends: nothing queues on the way, no wire drops, lifting it ends the wait', async () => {
+    const { host, v, close } = await limited('transfer-dl', 256)
+    const rate = 256 * KiB
+    try {
+      // a host downloads nothing: no gate, and the setting changes nothing
+      host.setDownloadLimit(100)
+      expect(inside(host).torrent._requestGate).toBeNull()
+      expect(inside(v).torrent._requestGate?.rateBps).toBe(rate)
+      const verified = new Set<number>()
+      v.on('verified', (i) => verified.add(i))
+      const started = performance.now()
+      v.setPlayhead({ byte: 0, windowBytes: 4 * P, hotBytes: P, seek: true })
+      // in transit: what the host put on its wire and the viewer has not read yet. A read throttle (WebTorrent's
+      // downloadLimit) leaves the host sending into the viewer's buffer (ADR 0002 Finding 3); here only requests
+      // wait, at the viewer
+      let inTransit = 0
+      while (performance.now() - started < 8000) {
+        const sent = inside(host).torrent.wires[0]?.uploaded ?? 0
+        inTransit = Math.max(inTransit, sent - received(v))
+        await sleep(100)
+      }
+      const s = (performance.now() - started) / 1000
+      const wire = inside(v).torrent.wires[0]
+      const summary = JSON.stringify({ s, got: received(v), pieces: verified.size, inTransit })
+      expect(received(v), summary).toBeLessThanOrEqual(rate * s + burst(rate) + BLOCK)
+      expect(verified.size * P, summary).toBeGreaterThanOrEqual(0.8 * rate * 8)
+      expect(inTransit, summary).toBeLessThanOrEqual(256 * KiB)
+      // lifted: the rest (two thirds of the file) comes at once
+      const done = new Promise<void>((resolve) => v.once('done', () => resolve()))
+      const lifted = performance.now()
+      v.setDownloadLimit(null)
+      await Promise.race([done, sleep(3000)])
+      expect(
+        v.pieceStates().every((x) => x === 2),
+        summary,
+      ).toBe(true)
+      expect(performance.now() - lifted).toBeLessThan(3000)
+      // the same wire all along: no request waited 30 s for an answer (WebTorrent's PIECE_TIMEOUT)
+      expect(inside(v).torrent.wires).toEqual([wire])
+      expect(wire?.destroyed).toBe(false)
+    } finally {
+      await close()
+    }
+  })
+
+  it('a reader blocked on a piece borrows past the limit, and the average stays at the limit', async () => {
+    const { v, close } = await limited('transfer-dl-borrow', 128)
+    const rate = 128 * KiB
+    try {
+      v.setPlayhead({ byte: 0, windowBytes: 4 * P, hotBytes: P, seek: true })
+      await sleep(2500) // L1 and on, at the limit: the bucket is empty
+      const K = 20 // in L2, far from what was asked for so far
+      expect(v.pieceStates()[K]).toBe(0)
+      const verified = new Promise<number>((resolve) =>
+        v.on('verified', (i) => {
+          if (i === K) resolve(performance.now())
+        }),
+      )
+      const from = received(v)
+      const started = performance.now()
+      const reader = v.streamSource?.openReader(0, K * P)
+      reader?.blockedOn(K) // what the stream server does when mpv reads into a missing piece
+      const ms = (await Promise.race([verified, sleep(5000).then(() => Number.NaN)])) - started
+      await sleep(10_000 - (performance.now() - started))
+      reader?.close()
+      const got = received(v) - from
+      const summary = JSON.stringify({ ms: Math.round(ms), got })
+      // its 256 KiB at the limit take 2 s; borrowing 1 s of the rate, 1 s
+      expect(ms, summary).toBeLessThan(1500)
+      // over the 10 s from the block, the borrowing included
+      expect(got, summary).toBeLessThanOrEqual(rate * 10 + burst(rate) + BLOCK)
+      expect(got, summary).toBeGreaterThanOrEqual(0.8 * rate * 10)
+    } finally {
+      await close()
+    }
+  })
+
+  it('keeps the R6 order under a limit, and a seek’s first piece comes next, past at most the one in flight', async () => {
+    const { v, close } = await limited('transfer-dl-order', 512)
+    try {
+      const order: number[] = []
+      v.on('verified', (i) => order.push(i))
+      v.setPlayhead({ byte: 12 * P, windowBytes: 8 * P, hotBytes: P, seek: true })
+      await until(() => order.length >= 6, 10_000, 'six pieces')
+      expect(order.slice(0, 6)).toEqual([12, 13, 14, 15, 16, 17]) // the hot window, then L1
+      const inFlight = [...v.pieceStates()].flatMap((x, i) => (x === 1 ? [i] : []))
+      const n = order.length
+      v.setPlayhead({ byte: 3 * P, windowBytes: 8 * P, hotBytes: P, seek: true })
+      await until(() => order.indexOf(3, n) >= 0, 10_000, 'the seek target')
+      const detour = order.slice(n, order.indexOf(3, n))
+      const summary = JSON.stringify({ order, inFlight })
+      expect(
+        detour.every((i) => inFlight.includes(i)),
+        summary,
+      ).toBe(true)
+      expect(detour.length, summary).toBeLessThanOrEqual(1)
+    } finally {
+      await close()
+    }
   })
 })

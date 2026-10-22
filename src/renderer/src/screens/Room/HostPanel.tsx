@@ -2,6 +2,7 @@ import { useState } from 'react'
 import type { StartMode } from '../../../../shared/settings'
 import { wt } from '../../bridge'
 import { FeasibilityNote } from '../../components/Feasibility'
+import { LimitField } from '../../components/LimitField'
 import { Segmented, Switch } from '../../components/ui'
 import { call } from '../../rpc'
 import { pushToast, useApp } from '../../store'
@@ -183,27 +184,8 @@ function Membership(): React.JSX.Element {
 function Network(): React.JSX.Element {
   const room = useApp((s) => s.core.room)
   const dupFactor = useApp((s) => s.core.transfer?.dupFactor)
-  const savedLimit = useApp((s) => s.settings?.uploadLimitKBps ?? null)
   // core keeps sending prepare.feasibility once a second while hosting
   const feasibility = useApp((s) => s.core.prepare?.feasibility)
-  const [draft, setDraft] = useState<string | null>(null)
-  const [error, setError] = useState<string | null>(null)
-  const limit = draft ?? (savedLimit === null ? '' : String(savedLimit))
-
-  const commit = async (): Promise<void> => {
-    if (draft === null) return
-    const t = draft.trim()
-    const n = t === '' ? null : Number(t)
-    if (n !== null && (!Number.isInteger(n) || n <= 0)) {
-      setError('Use a whole number of KB/s, or leave empty for no limit.')
-      return
-    }
-    setError(null)
-    setDraft(null)
-    if (n === savedLimit) return
-    const r = await wt().app.setSettings({ uploadLimitKBps: n })
-    if (!r.ok) setError(r.message)
-  }
 
   const relay = room?.relay.status ?? 'none'
   return (
@@ -221,27 +203,13 @@ function Network(): React.JSX.Element {
         )}
       </p>
       <FeasibilityNote feasibility={feasibility} />
-      <div className="row">
-        <label htmlFor="upload-limit">Upload limit (KB/s)</label>
-        <input
-          id="upload-limit"
-          type="number"
-          min={1}
-          style={{ width: 110 }}
-          placeholder="No limit"
-          value={limit}
-          aria-invalid={error ? true : undefined}
-          aria-describedby={error ? 'upload-limit-error' : undefined}
-          onChange={(e) => setDraft(e.target.value)}
-          onBlur={() => void commit()}
-          onKeyDown={(e) => e.key === 'Enter' && void commit()}
-        />
-      </div>
-      {error && (
-        <p id="upload-limit-error" className="error-text" role="alert" style={{ margin: 0, fontSize: 12 }}>
-          {error}
-        </p>
-      )}
+      {/* no download limit: a host downloads nothing */}
+      <LimitField
+        id="upload-limit"
+        label="Upload limit (KB/s)"
+        setting="uploadLimitKBps"
+        hint="Usually not needed: sending already slows down when your connection is full."
+      />
     </fieldset>
   )
 }

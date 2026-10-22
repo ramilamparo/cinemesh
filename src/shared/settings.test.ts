@@ -46,6 +46,45 @@ describe('settings', () => {
   })
 })
 
+describe('the desync warning setting', () => {
+  it('is 1 s by default, also for a settings file from before it, and 0 turns it off', () => {
+    expect(defaultSettings().desyncWarnMs).toBe(1000)
+    const { settings, valid } = parseSettings({ theme: 'dark', speedNudge: false })
+    expect(valid).toBe(true)
+    expect(settings).toMatchObject({ theme: 'dark', speedNudge: false, desyncWarnMs: 1000 })
+    expect(mergeSettings(defaultSettings(), { desyncWarnMs: 0 }).desyncWarnMs).toBe(0)
+  })
+
+  it('takes 0.5 to 30 s in whole ms, or 0', () => {
+    for (const ms of [0, 500, 1500, 30_000])
+      expect(mergeSettings(defaultSettings(), { desyncWarnMs: ms }).desyncWarnMs).toBe(ms)
+    for (const ms of [499, 30_001, 1500.5, -1, 1]) {
+      expect(() => mergeSettings(defaultSettings(), { desyncWarnMs: ms })).toThrow()
+    }
+  })
+})
+
+describe('the download limit setting', () => {
+  it('is off by default, also for a settings file from before it, and takes whole KiB/s', () => {
+    expect(defaultSettings().downloadLimitKBps).toBeNull()
+    const { settings, valid } = parseSettings({ theme: 'dark', uploadLimitKBps: 800 })
+    expect(valid).toBe(true)
+    expect(settings).toMatchObject({ uploadLimitKBps: 800, downloadLimitKBps: null })
+    expect(mergeSettings(defaultSettings(), { downloadLimitKBps: 500 }).downloadLimitKBps).toBe(500)
+    expect(mergeSettings(defaultSettings(), { downloadLimitKBps: null }).downloadLimitKBps).toBeNull()
+    for (const kbps of [0, -1, 1.5]) {
+      expect(() => mergeSettings(defaultSettings(), { downloadLimitKBps: kbps })).toThrow()
+    }
+  })
+
+  it("a newer app's file still reads: a field this version does not know is dropped, not the file", () => {
+    const { settings, valid } = parseSettings({ downloadLimitKBps: 300, someFutureField: true })
+    expect(valid).toBe(true)
+    expect(settings.downloadLimitKBps).toBe(300)
+    expect(settings).not.toHaveProperty('someFutureField')
+  })
+})
+
 describe('settings patches', () => {
   it('leave unspecified settings untouched', () => {
     const custom = mergeSettings(defaultSettings(), { displayName: 'Ram', hashWorkers: 3 })

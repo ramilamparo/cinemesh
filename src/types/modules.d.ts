@@ -153,6 +153,10 @@ declare module 'webtorrent' {
     }
     /** re-runs interest and requests on every wire (synchronously in Node) and gc's done selections */
     _updateSelections(): void
+    /** re-runs requests on every wire (synchronously in Node) */
+    _update(): void
+    /** patches/webtorrent+3.0.21.patch: asked before every block request; the viewer's download limit, null = none */
+    _requestGate: import('../core/transfer/download-gate.js').RequestGate | null
     /** verified pieces (ours) */
     bitfield: { get(i: number): boolean }
     /** peers by id (a MuxWireStream's id); `wire` is set once the peer is connected; null once destroyed */

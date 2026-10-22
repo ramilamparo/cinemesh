@@ -64,12 +64,35 @@ test('Settings opens, rejects a bad value and saves a good one', async () => {
   const toasts = page.getByRole('region', { name: 'Notifications' })
   await expect(toasts.locator('[role="status"], [role="alert"]').first()).toBeVisible()
 
+  // the desync warning: on by default, in seconds
+  const seconds = dialog.getByLabel('Seconds behind before warning')
+  await expect(seconds).toHaveValue('1')
+  await seconds.fill('0.2')
+  await dialog.getByRole('button', { name: 'Save', exact: true }).click()
+  await expect(dialog.getByText('Seconds must be between 0.5 and 30.')).toBeVisible()
+
+  // the download limit: watching only, whole KB/s
+  const download = dialog.getByLabel('Download limit (KB/s)')
+  await download.fill('0')
+  await dialog.getByRole('button', { name: 'Save', exact: true }).click()
+  await expect(dialog.getByText('Download limit must be between 1 and 10000000.')).toBeVisible()
+  expect(savedSettings().downloadLimitKBps).toBeNull()
+
   await dialog.getByLabel('UDP port').fill('')
+  await seconds.fill('2')
+  await download.fill('800')
   await dialog.getByLabel('Display name').fill('E2E Tester')
   await dialog.getByRole('button', { name: 'Save', exact: true }).click({ timeout: 2000 })
   await expect(dialog).toBeHidden()
   await expect.poll(() => savedSettings().displayName).toBe('E2E Tester')
+  expect(savedSettings().desyncWarnMs).toBe(2000)
+  expect(savedSettings().downloadLimitKBps).toBe(800)
   await expect(page.getByLabel('Display name (what friends see)')).toHaveValue('E2E Tester')
+  await page.getByRole('button', { name: 'Settings' }).click()
+  await expect(dialog.getByLabel('Seconds behind before warning')).toHaveValue('2')
+  await expect(dialog.getByLabel('Download limit (KB/s)')).toHaveValue('800')
+  await page.keyboard.press('Escape')
+  await expect(dialog).toBeHidden()
 })
 
 test('Escape closes Settings', async () => {

@@ -4,6 +4,7 @@ import type { PrepareEvent } from '../../shared/ipc/core.js'
 import { buildManifest, encodeManifest } from '../../shared/media/manifest.js'
 import { FASTSTART_REMUX, MediaMap, needsFullDownload } from '../../shared/media/media-map.js'
 import type { ByteRange, Manifest } from '../../shared/media/types.js'
+import type { PeerWarning } from '../../shared/peer-warnings.js'
 import { CodedError } from '../../shared/result.js'
 import { buildMediaIndex } from '../media/build-index.js'
 import { Playhead } from '../media/playhead.js'
@@ -20,6 +21,7 @@ import { type SessionFileData, SessionFile, sessionFilePath } from './session-fi
 import { encodeCoverage } from './timeline.js'
 import { Timeline } from './timeline.js'
 import { MediaPortAdapter, TransferPortAdapter } from './sync-ports.js'
+import { HASH_FAILS_NOTICE, HashFailWatch } from './hash-fails.js'
 import { collectTransferLinks } from './striping.js'
 import { MAX_MANIFEST_BYTES, criticalSpans } from './viewer-session.js'
 
@@ -109,6 +111,11 @@ export class HostSession extends BaseSession {
   private avgBytesPerSec = 0
   /** the final prepare event, re-sent once a second in the room with a fresh feasibility */
   private readyEvent: PrepareEvent | null = null
+  /** viewers' hash failures (plan §4.2 "Source-change watchdog"): what the size and mtime checks cannot see */
+  private readonly hashFails = new HashFailWatch(() => {
+    this.deps.log.warn('viewers report pieces failing their hash check: the source no longer matches its hashes')
+    this.notice(HASH_FAILS_NOTICE)
+  })
 
   private constructor(
     deps: SessionDeps,
@@ -274,7 +281,7 @@ export class HostSession extends BaseSession {
     const transfer = this.transfer
     this.playhead = new Playhead(map, { setPlayhead: (plan) => transfer.setGroupPlayhead(plan) })
     this.playhead.set(this.input.resume?.file?.group?.lastAnchor.posS ?? 0, 'join')
-    this.unsubs.push(collectTransferLinks({ room: this.room, transfer, log: this.deps.log }))
+    this.unsubs.push(collectTransferLinks({ room: this.room, transfer, log: this.deps.log, hashFails: this.hashFails }))
     this.transfer.on('stats', (st) => {
       this.lastStats = st
       this.peakUpBps = Math.max(this.peakUpBps, st.upBps)
@@ -464,6 +471,10 @@ export class HostSession extends BaseSession {
 
   protected override transferPeers(): readonly PeerTransferStats[] {
     return this.lastStats?.peers ?? []
+  }
+
+  protected override peerWarnings(): ReadonlyMap<string, readonly PeerWarning[]> {
+    return this.hashFails.warnings()
   }
 
   protected override keepAwake(): boolean {

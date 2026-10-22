@@ -26,8 +26,16 @@ const num = z.number()
 const pos = z.number().min(0)
 const peerId = z.string().min(1).max(128)
 
+/**
+ * The v1 warning codes, all a member ever sends: an older host fails a whole sync.status on a code it does not know
+ * (and so stops hearing that member). A new condition is worked out on the host, not sent.
+ */
 export const WarningCodeSchema = z.enum(['slow-download', 'frame-drops'])
 export type WarningCode = z.infer<typeof WarningCodeSchema>
+
+export function isWarningCode(s: string): s is WarningCode {
+  return (WarningCodeSchema.options as readonly string[]).includes(s)
+}
 
 export const CauseSchema = z.object({
   by: peerId,
@@ -90,9 +98,20 @@ export const SyncStatusSchema = z.object({
   lagMs: num,
   clockErrMs: num.nullable(),
   frameDrops: z.number().int().min(0),
-  warnings: z.array(WarningCodeSchema).max(8),
+  /** codes this version does not know are dropped, not the status */
+  warnings: z
+    .array(z.string().max(32))
+    .max(8)
+    .transform((ws) => ws.filter(isWarningCode)),
   /** seconds until the member has everything to EOF (play-through start mode) */
   etaS: num.nullable().optional(),
+  /**
+   * Added: how far behind the room the member is while its own desync warning shows (DesyncMonitor). Optional: an
+   * older host strips it, an older viewer never sends it. Not a warning code, which an older host would refuse.
+   */
+  behindS: pos.optional(),
+  /** Added: the member's own download limit, bytes/s, sent only when set. Optional, like behindS. */
+  downLimitBps: pos.optional(),
 })
 export type SyncStatus = z.infer<typeof SyncStatusSchema>
 

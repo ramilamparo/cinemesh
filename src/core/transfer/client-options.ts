@@ -4,9 +4,10 @@ import type { WebTorrentOptions } from 'webtorrent'
  * WebTorrent runs only over our Hyperswarm connections: every discovery and transport it would open
  * by itself is off. `connPool: false` needs patches/webtorrent+3.0.21.patch (no TCP listener).
  */
-// No default downloadLimit: WebTorrent throttles the read side (peer.js:135-155) and MuxWireStream cannot
-// push back on Protomux, so a download limit only moves the backlog into the viewer's RAM (S2). Host memory
-// is bounded by reqq (engine.ts) instead.
+// No downloadLimit: WebTorrent throttles the read side (peer.js:135-155) and MuxWireStream cannot push back on
+// Protomux, so its limit only moves the backlog into the viewer's RAM (S2). Host memory is bounded by reqq
+// (engine.ts) instead, and the viewer's own download limit holds back the requests it sends (download-gate.ts,
+// ADR 0010).
 export const WEBTORRENT_OPTIONS = {
   connPool: false,
   dht: false,

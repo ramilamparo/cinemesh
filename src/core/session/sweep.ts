@@ -111,7 +111,7 @@ export async function sweepPartialData(opts: {
     // lstat: a symlink was not made by us, so it is neither judged nor deleted
     const st = await lstat(g.dir).catch(() => null)
     if (!st?.isDirectory() || (await exporting(g.dir))) continue
-    // any write counts as use: the journal and segments while downloading, meta.torrent on every join
+    // any write counts as use: the journal and segments while downloading, meta.torrent and manifest.bin on every join
     const usage = await scan(g.dir)
     g.usedAt = Math.max(g.usedAt, st.mtimeMs, usage.newest)
     g.bytes = usage.bytes

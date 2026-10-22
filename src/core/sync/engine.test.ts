@@ -1,10 +1,10 @@
 import { describe, expect, it } from 'vitest'
 import { EventLoop, NodeClock, rng } from '../../../test/sync/sim/loop.js'
-import type { NoticeEvent, PlaybackEvent } from '../../shared/ipc/core.js'
-import { SyncEngine } from './engine.js'
+import type { NoticeEvent, PlaybackEvent, SyncEvent } from '../../shared/ipc/core.js'
+import { type PeerSync, SyncEngine } from './engine.js'
 import { MEMBER } from './member.js'
 import type { PlayerSnapshot, PresenceEvent } from './ports.js'
-import type { Cause, SyncBusMessage, SyncState } from './protocol.js'
+import { type Cause, parseBusMessage, type SyncBusMessage, type SyncState, type SyncStatus } from './protocol.js'
 
 const HOST = 'host'
 
@@ -26,8 +26,18 @@ const NO_PLAYER: PlayerSnapshot = {
 /** An idle mpv (started without --pause, nothing loaded): mpv's own pause flag is off. */
 const IDLE_MPV: PlayerSnapshot = { ...NO_PLAYER, available: true, paused: false }
 
+/** What the viewer's media and transfer report: nothing needed and everything here, unless a test says otherwise. */
+interface Rates {
+  needBps: number
+  rateBps: number
+  etaToEofS: number | null
+  /** the viewer's own download limit; absent, the port has none */
+  downLimitBps?: number | null
+}
+
 /** A viewer engine on a still clock, fed bus messages by hand; pings go over the bus. */
-function viewer(player: PlayerSnapshot = NO_PLAYER) {
+function viewer(player: PlayerSnapshot = NO_PLAYER, rates: Partial<Rates> = {}) {
+  const r: Rates = { needBps: 0, rateBps: 0, etaToEofS: 0, ...rates }
   const loop = new EventLoop()
   const clock = new NodeClock(loop, rng(1), { offsetMs: 2e6, skewPpm: 0, timerLateMs: 0 })
   const sent: SyncBusMessage[] = []
@@ -67,11 +77,17 @@ function viewer(player: PlayerSnapshot = NO_PLAYER) {
         durationS: () => 600,
         readiness: () => true,
         bufferedAheadS: () => 600,
-        needBps: () => 0,
+        needBps: () => r.needBps,
         playhead: { set: () => undefined },
         onChange: () => () => undefined,
       },
-      transfer: { rateBps: () => 0, etaToEofS: () => 0, coverage: () => null, diskFull: () => false },
+      transfer: {
+        rateBps: () => r.rateBps,
+        etaToEofS: () => r.etaToEofS,
+        coverage: () => null,
+        diskFull: () => false,
+        downLimitBps: () => r.downLimitBps ?? null,
+      },
     },
   })
   const notices: { t: number; n: NoticeEvent }[] = []
@@ -82,6 +98,7 @@ function viewer(player: PlayerSnapshot = NO_PLAYER) {
   const answered = new Set<number>()
   return {
     loop,
+    sent,
     notices,
     playback,
     presence: (ev: PresenceEvent): void => onPresence(ev),
@@ -117,7 +134,7 @@ function viewer(player: PlayerSnapshot = NO_PLAYER) {
 }
 
 /** The host's engine with a member 'v1' present, every bus publish recorded, members' messages fed by hand. */
-function host() {
+function host(opts: { desyncWarnMs?: number } = {}) {
   const loop = new EventLoop()
   const clock = new NodeClock(loop, rng(2), { offsetMs: 5e6, skewPpm: 0, timerLateMs: 0 })
   const sent: { msg: SyncBusMessage; to: string | undefined }[] = []
@@ -129,6 +146,7 @@ function host() {
     selfName: 'Host',
     hostId: HOST,
     nudge: true,
+    ...opts,
     ports: {
       clock,
       player: {
@@ -351,5 +369,151 @@ describe('SyncEngine (viewer): playback with nothing loaded', () => {
     expect(v.playback.at(-1)).toMatchObject({ posS: 10, paused: false })
     expect(v.engine.roomPosition()).toBe(10)
     v.engine.stop()
+  })
+})
+
+describe('SyncEngine: warnings in the peer rows', () => {
+  const members = [
+    { peerId: HOST, name: 'Host', phase: 'paused', exempt: false },
+    { peerId: 'v1', name: 'Sam', phase: 'paused', exempt: false },
+  ] as const
+
+  it("a viewer's own row has its member's warnings and rates; other rows have none", () => {
+    const v = viewer(NO_PLAYER, { needBps: 1_000_000, rateBps: 500_000, etaToEofS: 100 })
+    let rows: PeerSync[] = []
+    v.engine.on('peers', (p) => (rows = p))
+    v.state({ members: members.map((m) => ({ ...m })) })
+    v.loop.runFor(MEMBER.SLOW_RATE_MS + 2000)
+    expect(rows.find((p) => p.id === 'v1')).toMatchObject({
+      warnings: ['slow-download'],
+      rateBps: 500_000,
+      needBps: 1_000_000,
+      bufferedAheadS: 600,
+    })
+    expect(rows.find((p) => p.id === HOST)).toMatchObject({ warnings: [], rateBps: null, needBps: null })
+    expect(rows.find((p) => p.id === 'v1')?.downLimitBps).toBeNull()
+    // the status it sends says the same, and the host reads it back as it was sent
+    const status = v.sent.filter((m): m is SyncStatus => m.t === 'sync.status').at(-1)
+    expect(status?.warnings).toEqual(['slow-download'])
+    expect(parseBusMessage(JSON.parse(JSON.stringify(status)))).toEqual(status)
+    v.engine.stop()
+  })
+
+  it("a viewer's own row and status carry its download limit while one is set", () => {
+    const r: Partial<Rates> = { needBps: 1_000_000, rateBps: 400_000, etaToEofS: 100, downLimitBps: 409_600 }
+    const v = viewer(NO_PLAYER, r)
+    let rows: PeerSync[] = []
+    v.engine.on('peers', (p) => (rows = p))
+    v.state({ members: members.map((m) => ({ ...m })) })
+    v.loop.runFor(MEMBER.SLOW_RATE_MS + 2000)
+    expect(rows.find((p) => p.id === 'v1')).toMatchObject({ warnings: ['slow-download'], downLimitBps: 409_600 })
+    expect(rows.find((p) => p.id === HOST)?.downLimitBps).toBeNull()
+    const statuses = (): SyncStatus[] => v.sent.filter((m): m is SyncStatus => m.t === 'sync.status')
+    expect(statuses().at(-1)?.downLimitBps).toBe(409_600)
+    v.engine.stop()
+  })
+
+  it("the host keeps a member's known codes and drops the ones it does not know", () => {
+    const h = host()
+    let rows: PeerSync[] = []
+    h.engine.on('peers', (p) => (rows = p))
+    const st = h.engine.group?.state()
+    h.bus('v1', {
+      t: 'sync.status',
+      syncEpoch: st?.syncEpoch,
+      seq: st?.seq,
+      phase: 'paused',
+      pos: 0,
+      driftMs: null,
+      bufferedAheadS: 3,
+      rateBps: 10,
+      needBps: 20,
+      coverage: null,
+      canNudge: true,
+      lagMs: 0,
+      clockErrMs: null,
+      frameDrops: 0,
+      warnings: ['some-future-code', 'frame-drops'],
+      downLimitBps: 409_600,
+    })
+    h.loop.runFor(1500)
+    expect(rows.find((p) => p.id === 'v1')).toMatchObject({
+      warnings: ['frame-drops'],
+      rateBps: 10,
+      needBps: 20,
+      downLimitBps: 409_600,
+    })
+    expect(rows.find((p) => p.id === HOST)?.downLimitBps).toBeNull()
+    h.engine.stop()
+  })
+})
+
+describe('SyncEngine: the desync warning', () => {
+  const members = [
+    { peerId: HOST, name: 'Host', phase: 'playing', exempt: false },
+    { peerId: 'v1', name: 'Sam', phase: 'playing', exempt: false },
+  ] as const
+
+  it("a viewer's warning goes out in one sync event, with nothing else, and only its own row says behind", () => {
+    const v = viewer()
+    v.state({ members: members.map((m) => ({ ...m })) })
+    let rows: PeerSync[] = []
+    v.engine.on('peers', (p) => (rows = p))
+    const events: string[] = []
+    const syncs: SyncEvent[] = []
+    for (const e of ['sync', 'state', 'notice', 'playback'] as const) v.engine.on(e, () => events.push(e))
+    v.engine.on('sync', (e) => syncs.push(e))
+    v.engine.member.emit('desync', { state: 'behind', behindS: 3 })
+    expect(events).toEqual(['sync'])
+    expect(syncs[0]?.desync).toEqual({ state: 'behind', behindS: 3 })
+    expect(v.engine.syncEvent()?.desync).toEqual({ state: 'behind', behindS: 3 })
+    v.loop.runFor(1000)
+    expect(rows.find((p) => p.id === 'v1')?.behindS).toBe(3)
+    expect(rows.find((p) => p.id === HOST)?.behindS).toBeNull()
+    // catching up: no number, in the event or on the row
+    v.engine.member.emit('desync', { state: 'catching-up' })
+    expect(syncs.at(-1)?.desync).toEqual({ state: 'catching-up' })
+    v.loop.runFor(1000)
+    expect(rows.find((p) => p.id === 'v1')?.behindS).toBeNull()
+    v.engine.member.emit('desync', null)
+    expect(syncs.at(-1)).not.toHaveProperty('desync')
+    expect(syncs).toHaveLength(3)
+    v.engine.stop()
+  })
+
+  it("the host shows a member's behindS from its status, and never warns or resyncs itself", () => {
+    const h = host({ desyncWarnMs: 1000 })
+    let rows: PeerSync[] = []
+    h.engine.on('peers', (p) => (rows = p))
+    const st = h.engine.group?.state()
+    const status = {
+      t: 'sync.status',
+      syncEpoch: st?.syncEpoch,
+      seq: st?.seq,
+      phase: 'playing',
+      pos: 0,
+      driftMs: null,
+      bufferedAheadS: 3,
+      rateBps: 10,
+      needBps: 20,
+      coverage: null,
+      canNudge: true,
+      lagMs: 0,
+      clockErrMs: null,
+      frameDrops: 0,
+      warnings: [],
+    }
+    h.bus('v1', { ...status, behindS: 2.5 })
+    h.loop.runFor(1500)
+    expect(rows.find((p) => p.id === 'v1')?.behindS).toBe(2.5)
+    expect(rows.find((p) => p.id === HOST)?.behindS).toBeNull()
+    h.bus('v1', status)
+    h.loop.runFor(1000)
+    expect(rows.find((p) => p.id === 'v1')?.behindS).toBeNull()
+    expect(h.engine.resync()).toBe('not-ready')
+    h.engine.setDesyncWarn(500)
+    expect(h.engine.member.desyncState).toBeNull()
+    expect(h.engine.syncEvent()).not.toHaveProperty('desync')
+    h.engine.stop()
   })
 })

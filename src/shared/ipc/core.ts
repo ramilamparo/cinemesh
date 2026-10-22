@@ -1,6 +1,7 @@
 // Renderer <-> core contract, carried over a MessagePort that main brokers (plan §5.1).
 // Wire: renderer sends {t:'hello'} then {t:'req'}; core answers {t:'snapshot'}, {t:'res'} and pushes {t:'evt'}.
 
+import type { PeerWarning } from '../peer-warnings.js'
 import type { StartMode } from '../settings.js'
 
 export const CORE_PROTOCOL = 1
@@ -23,6 +24,15 @@ export type SyncMode = 'idle' | 'paused' | 'playing' | 'waiting' | 'ended'
 export type MemberPhase =
   'joining' | 'loading' | 'ready' | 'playing' | 'paused' | 'seeking' | 'buffering' | 'ended' | 'no-player' | 'disk-full'
 export type IntentRejection = 'perm-playpause' | 'perm-seek' | 'superseded' | 'stale' | 'not-ready' | 'timeout'
+/**
+ * What playback.resync did: 'skip' to the room, a 'rendezvous' further ahead (the data at the room's position is not
+ * here yet), 'wait' paused for the room (ahead of it); or nothing: 'in-sync' (within 300 ms), 'busy' (a catch-up is
+ * already on its way, or the last Resync was under 2 s ago), 'not-playing' (the room does not play, or the host is
+ * gone), 'not-ready' (the player is not playing the file yet).
+ */
+export type ResyncOutcome = 'skip' | 'rendezvous' | 'wait' | 'in-sync' | 'busy' | 'not-playing' | 'not-ready'
+/** This viewer is behind the host by behindS seconds, or is catching up after that or after a Resync. */
+export type SyncDesync = { state: 'behind'; behindS: number } | { state: 'catching-up' }
 export type LeaveData = 'keep' | 'save' | 'delete'
 export type PlayerStatus =
   | 'absent'
@@ -124,6 +134,11 @@ export interface CoreRequests {
   'sync.startAnyway': { params: Empty; result: null }
   'sync.request': { params: { kind: 'play' | 'pause' | 'seek'; posS?: number }; result: null }
   'playback.intent': { params: PlaybackIntent; result: { accepted: boolean; reason?: IntentRejection } }
+  /**
+   * Added, viewer only ('not-viewer' on the host): meet the room on this machine. Not an intent: it needs no
+   * permission, and the room and the other members do not move.
+   */
+  'playback.resync': { params: Empty; result: { outcome: ResyncOutcome } }
   'player.setTrack': { params: { kind: 'audio' | 'sub'; id: number | 'no' }; result: null }
   'player.setVolume': { params: { volume: number; muted: boolean }; result: null }
   'player.reopen': { params: Empty; result: null }
@@ -240,7 +255,8 @@ export interface PeerView {
   coverage: string | null
   /** Added: the member's last reported playback position, for the timeline peer markers. */
   posS?: number | null
-  warnings: string[]
+  /** one per code, most severe first; the text comes from peerWarningText */
+  warnings: PeerWarning[]
   exempt: boolean
   lastError?: { code: string; hint: string }
 }
@@ -269,6 +285,8 @@ export interface SyncEvent {
     softDeadline: number | null
   }
   cause?: { by: string; kind: string; from?: number; to?: number }
+  /** Added, viewer only: this member is behind the room (Settings desyncWarnMs); absent when in sync or off. */
+  desync?: SyncDesync
 }
 
 export interface TimelineEvent {

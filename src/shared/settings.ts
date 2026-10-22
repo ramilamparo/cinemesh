@@ -40,10 +40,14 @@ export const SettingsSchema = z.object({
     .array(z.string().regex(/^[^\s:]+:\d{1,5}$/))
     .max(16)
     .default([]),
+  // KiB/s, null = none. Upload: hosting and watching; download: watching only (a host downloads nothing)
   uploadLimitKBps: z.number().int().positive().nullable().default(null),
+  downloadLimitKBps: z.number().int().positive().nullable().default(null),
   hashWorkers: z.number().int().min(1).max(4).default(2),
   speedNudge: z.boolean().default(true),
   oscPersistentStrip: z.boolean().default(false),
+  // 0 = off; otherwise warn (with a Resync to live button) after this many ms behind the host for 2 s
+  desyncWarnMs: z.union([z.literal(0), z.number().int().min(500).max(30_000)]).default(1000),
   hostDefaults: HostDefaultsSchema.prefault({}),
 })
 

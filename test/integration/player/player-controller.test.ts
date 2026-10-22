@@ -533,12 +533,14 @@ describe.skipIf(!HAVE_MPV || !HAVE_FFMPEG)('PlayerController with real mpv', () 
     const intents: PlayerIntent[] = []
     p.on('intent', (i) => intents.push(i))
     const ipc = (p as unknown as { ipc: MpvIpc }).ipc
-    for (const key of ['SPACE', 'RIGHT', 'r']) await ipc.command(['keypress', key])
-    await until(() => intents.length === 3)
+    // plain r shows the app; Shift+R is a viewer's Resync to live
+    for (const key of ['SPACE', 'RIGHT', 'r', 'R']) await ipc.command(['keypress', key])
+    await until(() => intents.length === 4)
     expect(intents).toEqual([
       { kind: 'play', src: 'osc', seq: 1 },
       { kind: 'seek', pos: 105, src: 'osc', seq: 2 },
       { kind: 'show-app', src: 'osc', seq: 3 },
+      { kind: 'resync', src: 'osc', seq: 4 },
     ])
     expect(await prop(p, 'pause')).toBe(true)
     expect(await prop(p, 'time-pos')).toBeCloseTo(3, 1)

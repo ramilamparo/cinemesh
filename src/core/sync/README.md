@@ -10,6 +10,7 @@ transfer engine in production, and against the discrete-event simulator in `test
 | `protocol.ts`   | zod schemas for the `sync.*` bus messages, `parseBusMessage`, `isNewer`, and the datagram codecs         |
 | `clock.ts`      | `OffsetEstimator` (NTP-style θ̂ and ε) and `ClockClient` (ping cadence, fallback to bus pings), `pong()`  |
 | `drift.ts`      | `DriftController`: the plan's `step()`, sample gating, the median of 5, skip windows, `seekLat`          |
+| `desync.ts`     | `DesyncMonitor`: when a viewer's "behind the host" warning shows and hides                               |
 | `start-gate.ts` | Start modes: N s buffered, or play-through (the ETA rule)                                                |
 | `group.ts`      | `GroupController`: the host's authoritative state machine                                                |
 | `member.ts`     | `MemberController`: everyone's player follower, including the host's own (over loopback)                 |
@@ -22,6 +23,7 @@ const engine = new SyncEngine({
   role: 'host' | 'viewer',
   selfId, selfName, hostId,
   nudge: settings.speedNudge,          // the user's speed-nudge switch
+  desyncWarnMs: settings.desyncWarnMs, // viewer: warn this many ms behind (0 = off); the host never warns itself
   ports: { clock, player, bus, datagram, media, transfer },
   host: { syncEpoch: randomU32(), perms, waitForAll, startMode, resume?: GroupSnapshot },  // host only
 })
@@ -32,6 +34,8 @@ await engine.intent(playbackIntent)    // playback.intent and OSC input; toggle/
 engine.request(kind, posS?)            // viewer "Ask host"
 engine.setPerms(perms) / setWaitForAll(on) / setStartMode(mode) / startAnyway()   // host only, no-ops on viewers
 engine.setNudge(on)
+engine.setDesyncWarn(ms)               // viewer: the warning's setting changed (no-op on the host)
+engine.resync()                        // viewer: playback.resync, local only (no intent); 'not-ready' on the host
 engine.roomPosition()                  // seconds; for the UI and the playhead (the anchor until θ̂ is known)
 engine.seekBase()                      // where seekRel and the OSC's seek-rel count from: our newest unanswered seek, else roomPosition()
 engine.syncEvent()                     // latest SyncEvent or null
@@ -45,9 +49,9 @@ engine.stop()                          // cancels every timer and subscription; 
 
 | Event      | Payload                   | Notes                                                                                                                                                                                                                                                                                                                         |
 | ---------- | ------------------------- | ----------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------- |
-| `sync`     | `SyncEvent` (core.ts)     | On every newly applied state. `wait.softDeadline` is converted to _local_ monotonic ms. `cause.by` is a display name.                                                                                                                                                                                                         |
+| `sync`     | `SyncEvent` (core.ts)     | On every newly applied state, and (viewer) when `desync` changes: then only `sync`, no `state` or cause notice. `wait.softDeadline` is converted to _local_ monotonic ms. `cause.by` is a display name.                                                                                                                       |
 | `playback` | `PlaybackEvent` (core.ts) | 4 Hz. `at` is local monotonic ms. With no file loaded (no source yet, a download that must complete first, mpv starting or loading) it shows the room: `roomPosition()`, paused unless the room plays, never seeking or stalled. An idle mpv's own pause flag is off, and the anchor would freeze.                            |
-| `peers`    | `PeerSync[]`              | 1 Hz. The sync-owned fields of `PeerView`. The lead merges them with net (`path`, `rttMs`) and transfer (`downBps`, `havePct`, …) fields by `id`. On the host every field comes from `sync.status`; viewers only know phases and exemptions, plus their own drift.                                                            |
+| `peers`    | `PeerSync[]`              | 1 Hz. The sync-owned fields of `PeerView`. The lead merges them with net (`path`, `rttMs`) and transfer (`downBps`, `havePct`, …) fields by `id`. On the host every field comes from `sync.status`; viewers know phases and exemptions, plus their own drift, warnings, rates and `behindS`.                                  |
 | `notice`   | `NoticeEvent`             | Codes `sync.cause` (one code for all cause toasts, so the UI replaces the previous one; this is the "merged within 1 s"), `sync.exempt`, `sync.request` (host; action `playback.intent`), `sync.<rejection>` (with an **Ask host** action `sync.request` for permission rejections), `sync.host-gone`, `sync.host-back`.      |
 | `persist`  | `GroupSnapshot`           | Host only. Write `syncEpoch`, `seq` and `lastAnchor` into session.json. It fires on every publish (a new `seq`: write it **at once**, or a resume can start below a seq viewers hold) and every 5 s while playing (same `seq`, a newer position: this one may be debounced 2 s). The session adds `RESUME_SEQ_GAP` on resume. |
 | `state`    | `SyncState`               | Every newly applied state (for the OSC's `perms` and `ended` messages).                                                                                                                                                                                                                                                       |
@@ -111,7 +115,9 @@ engine.stop()                          // cancels every timer and subscription; 
   - `rateBps` is the 10 s EWMA;
   - `etaToEofS` is the time until everything from the playhead to EOF is local;
   - `coverage` is the 256-bit bitmap in base64;
-  - `diskFull` comes from `diskLow`/ENOSPC parking.
+  - `diskFull` comes from `diskLow`/ENOSPC parking;
+  - `downLimitBps` (optional): a viewer's download limit setting in bytes/s, read at every status; the host's port
+    has none.
 
 ### Wiring invariants
 
@@ -216,6 +222,26 @@ engine.stop()                          // cancels every timer and subscription; 
   for, and its ETA rule then wants an ETA of 0 (not 0.9 × what is left), so `wait.etaS` is the member's ETA to
   the end of the file. The first play's barrier has no deadline (the host's Start anyway ends it); seek and
   buffering barriers have a soft one at 8 s and a hard one at 30 s.
+- **Behind the host** (viewer, `desyncWarnMs`, default 1 s; `desync.ts`): the member measures its lag behind the
+  room at every tick (its own position: the extrapolated sample while playing, mpv's time-pos while buffering).
+  The warning shows once the lag less ε has stayed at the threshold for 2 s, and hides after 1 s under half of it
+  (keeping the number it showed meanwhile, never "0 s behind"). A changed setting starts it afresh; the same value
+  again (every settings change sends them all) changes nothing.
+  It applies only while the room plays and the member plays in it or catches up: never while paused, waiting,
+  loading, settled, out of disk, before θ̂, or while the host is gone (grace and hold); a newly applied state or a
+  move behind our back clears it at once, a θ̂ jump restarts its timers. A catch-up (start, late join, the drift
+  loop's skip) shows nothing of its own: 2 s is longer than every automatic fix, so the default never fires in
+  normal play. After a warning, or after Resync, a catch-up shows `catching-up` (no number), which ends at once
+  when the member lands in sync, and turns into `behind` only after another 2 s behind. A viewer ahead is not
+  warned: its pause-wait has no cooldown and fixes it within about 1.5 s. While `behind`, `sync.status.behindS`
+  carries the number to the host's row.
+- **Resync to live** (`MemberController.resync`, viewer only): meets the room on this machine, never as an intent,
+  so it needs no permission and the room, its state and the other members do not move. Behind: skip when the data
+  at the room's position is here and the player runs, else rendezvous (which also moves the download there).
+  Ahead: wait paused. `in-sync` within 300 ms (a stall's first moments included), `busy` during a catch-up or 2 s
+  after the last Resync, `not-playing` (room not playing, host gone), `not-ready` (no file, loading, landing, no
+  θ̂). A Resync during the host's 1 s buffering grace leaves the position the member waits at, so the room stops
+  waiting for it; it never opens a barrier (only `buffering` does).
 - **The room's position before the clock:** a viewer places a playing room on the host clock, so before its first
   θ̂ (joining, or a restarted host) `roomPosition()` is the anchor; its own clock alone would put it anywhere.
 
@@ -251,6 +277,20 @@ engine.stop()                          // cancels every timer and subscription; 
     still waits for them.
 11. **The start trim** (see Unpause scheduling): the plan's dead band (ON 60 ms) holds except for the first decision
     after a start, which corrects from OFF (15 ms) up.
+12. **Warnings** (`sync.status.warnings`):
+    - The codes are a closed v1 set, `slow-download` and `frame-drops`. An older host fails a whole status with a
+      code it does not know, and that member then goes silent to it, so members never send another: a new
+      condition is worked out on the host. Receivers drop codes they do not know and keep the status.
+    - `slow-download` clears only after the rate has stayed at 1.1 × need for 10 s (`SLOW_CLEAR_MS`); the plan
+      clears it at once, which made a rate near the threshold flicker on and off.
+    - Frame drops are counted only while playing outside the drift loop's holds, and the count starts afresh after
+      a seek, a start or a catch-up: those drop frames on their own.
+13. **Behind the host** (see Behaviour notes): `sync.status.behindS` is an optional field, not a warning code
+    (item 12), so an older host strips it and an older viewer omits it; no new message and no version change.
+    Resync never reaches the bus.
+14. **The member's download limit:** `sync.status.downLimitBps` (optional, sent only while a limit is set) tells the
+    host the viewer's own limit, which its slow-download line names (session README "Peer-list warnings"). The
+    warning itself does not change: a limited member below 1.1 × need still warns, because the room will buffer.
 
 ## Tests
 
@@ -280,7 +320,8 @@ WT_FUZZ_SEEDS=500 npx vitest run --project unit test/sync/fuzz.test.ts   # longe
     (`restartAfterMs`: it can reach the member after its next load went out), and a file mpv cannot open
     (`unopenable`); the player's own reload after a restart or a path change (`respawn(at)`,
     `externalPathChange`) replaces the member's load silently, a player that does not say so.
-- **`FakeMedia`:** downloaded spans that grow from the last `playhead.set` at `rateX`.
+- **`FakeMedia`:** downloaded spans that grow from the last `playhead.set` at `rateX`, and a reported download
+  limit (`downLimitBps`).
 - **`Network`:**
   - per-direction latency, jitter and loss (lost reliable messages pay a retransmission delay);
   - in-order reliable delivery, with a head-of-line backlog and partitions;
@@ -333,13 +374,22 @@ file's restart while that next load opens does not complete it. With the install
 after a seek or load, also for a 12 fps file whose landing is up to 78 ms past the target: no extra seek, the start
 on that frame; and with a container-fps a little above the real rate; the audio read after a pause kept when mpv
 reports the pause late, no re-read of a stale audio-pts), `seekLat` from every exact seek, and the start trim and
-first probe. `sync-ports.test.ts` checks `frameS` from `container-fps` and a 12 fps load through the adapter. `engine.test.ts` checks that a
-member flooding hellos and Ask host gets one answer per second and one toast per 2 s; `sync-ports.test.ts` checks
+first probe; the desync warning (shown 3 s into a stall, cleared by a new state, a new setting or a landed
+catch-up, restarted by a θ̂ jump, off at 0) and every Resync outcome. `src/core/sync/desync.test.ts` checks the
+monitor's timing rules, and `test/sync/desync.test.ts` the room: no warning in 10 min of WAN play with downloads,
+seeks and pauses, nor for spdif, the host or while the host is gone; a stalled viewer the room plays on without
+(or is exempt) is warned and the host sees it; Resync moves nobody else and never makes the room wait.
+`sync-ports.test.ts` checks `frameS` from `container-fps` and a 12 fps load through the adapter. `engine.test.ts` checks that a
+member flooding hellos and Ask host gets one answer per second and one toast per 2 s, and that a desync change is
+one `sync` event and nothing else, with `behindS` on the viewer's own row only (the host's from `sync.status`);
+`sync-ports.test.ts` checks
 the bus rates (a burst through, then nothing, also past a member that forwards). With the installed mpv,
 `test/integration/player/sync-reads.test.ts` checks the two reads on the production path: the sample right after a
 pause is the paused position, and the time-pos read at a paused seek's restart is the landed frame.
 
 `control.test.ts` and `start.test.ts` also cover:
+
+- a slow viewer in the host's rows, and its download limit named in the host's warning (none without one);
 
 - permissions and Ask host;
 - dedupe;

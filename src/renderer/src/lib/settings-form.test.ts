@@ -86,3 +86,74 @@ describe('validateSettingsForm', () => {
     expect(r.errors.bootstrapExtra).toContain('"no-port" is not host:port')
   })
 })
+
+describe('the download limit field', () => {
+  it('shows none as empty, and saves only what changed', () => {
+    expect(form.downloadLimitKBps).toBe('')
+    expect(formFromSettings({ ...current, downloadLimitKBps: 800 }).downloadLimitKBps).toBe('800')
+    expect(validateSettingsForm({ ...form, downloadLimitKBps: '500' }, current)).toMatchObject({
+      ok: true,
+      patch: { downloadLimitKBps: 500 },
+      settings: { downloadLimitKBps: 500, uploadLimitKBps: null },
+    })
+    const r = validateSettingsForm({ ...form, downloadLimitKBps: '500' }, current)
+    expect(r.ok && Object.keys(r.patch)).toEqual(['downloadLimitKBps'])
+    const limited = { ...current, downloadLimitKBps: 500 }
+    for (const empty of ['', ' ']) {
+      expect(validateSettingsForm({ ...formFromSettings(limited), downloadLimitKBps: empty }, limited)).toMatchObject({
+        ok: true,
+        patch: { downloadLimitKBps: null },
+      })
+    }
+  })
+
+  it('takes a whole number of KB/s from 1 to 10000000', () => {
+    const error = (text: string): string | undefined => {
+      const r = validateSettingsForm({ ...form, downloadLimitKBps: text }, current)
+      return r.ok ? undefined : r.errors.downloadLimitKBps
+    }
+    expect(error('-3')).toBe('Download limit must be a whole number.')
+    expect(error('1.5')).toBe('Download limit must be a whole number.')
+    expect(error('0')).toBe('Download limit must be between 1 and 10000000.')
+    expect(error('20000000')).toBe('Download limit must be between 1 and 10000000.')
+    expect(error('10000000')).toBeUndefined()
+  })
+})
+
+describe('the desync warning fields', () => {
+  it('shows the setting as a switch and seconds: off keeps 1 s ready to type over', () => {
+    expect(formFromSettings({ ...current, desyncWarnMs: 0 })).toMatchObject({ desyncWarn: false, desyncWarnS: '1' })
+    expect(formFromSettings({ ...current, desyncWarnMs: 2500 })).toMatchObject({ desyncWarn: true, desyncWarnS: '2.5' })
+    expect(form).toMatchObject({ desyncWarn: true, desyncWarnS: '1' })
+  })
+
+  it('saves seconds as ms, and 0 when off whatever the field holds', () => {
+    expect(validateSettingsForm({ ...form, desyncWarnS: '1.5' }, current)).toMatchObject({
+      ok: true,
+      patch: { desyncWarnMs: 1500 },
+    })
+    // a number field keeps ".5" as typed
+    expect(validateSettingsForm({ ...form, desyncWarnS: '.5' }, current)).toMatchObject({
+      ok: true,
+      patch: { desyncWarnMs: 500 },
+    })
+    expect(validateSettingsForm({ ...form, desyncWarn: false, desyncWarnS: 'junk' }, current)).toMatchObject({
+      ok: true,
+      patch: { desyncWarnMs: 0 },
+    })
+    const off = { ...current, desyncWarnMs: 0 }
+    expect(validateSettingsForm({ ...formFromSettings(off), desyncWarn: true }, off)).toMatchObject({
+      ok: true,
+      patch: { desyncWarnMs: 1000 },
+    })
+  })
+
+  it('rejects seconds outside 0.5 to 30', () => {
+    for (const bad of ['0.2', '.2', '31', 'abc', '', '-1', '1e1', '.', '1.']) {
+      expect(validateSettingsForm({ ...form, desyncWarnS: bad }, current)).toEqual({
+        ok: false,
+        errors: { desyncWarnS: 'Seconds must be between 0.5 and 30.' },
+      })
+    }
+  })
+})

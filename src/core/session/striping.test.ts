@@ -5,10 +5,12 @@ import { Bus, type BusLink, type BusMessage } from '../net/bus.js'
 import { toHex } from '../net/crypto.js'
 import { keyPairFromSeed } from '../net/identity.js'
 import type { MemberView, Room } from '../net/room.js'
-import type { TransferEngine } from '../transfer/engine.js'
+import type { HashFailStats, TransferEngine } from '../transfer/engine.js'
 import { MAX_URGENT } from '../transfer/revealer.js'
+import { HashFailWatch } from './hash-fails.js'
 import {
   MAX_LINKED,
+  MAX_REPORTED_HASH_FAILS,
   MAX_REPORTED_URGENT,
   REPORT_MIN_GAP_MS,
   REPORT_MS,
@@ -70,12 +72,16 @@ class FakeTransfer extends EventEmitter<{ 'blocked-changed': [number[]] }> {
   readonly urgent: [string, number[]][] = []
   readonly removed: string[] = []
   pieceCount = 100
+  fails: HashFailStats = { total: 0, worst: [] }
 
   linkedPeers(): string[] {
     return [...this.linked]
   }
   blockedPieces(): number[] {
     return [...this.blocked]
+  }
+  hashFailures(): HashFailStats {
+    return { total: this.fails.total, worst: this.fails.worst.map(([i, n]) => [i, n]) }
   }
   setViewerLinks(id: string, linked: readonly string[]): void {
     this.links.push([id, [...linked]])
@@ -179,6 +185,33 @@ describe('reportTransferLinks (viewer)', () => {
     expect(got).toHaveLength(1)
   })
 
+  it('adds its hash failures once it has any, at most MAX_REPORTED_HASH_FAILS pieces', () => {
+    vi.useFakeTimers()
+    const { viewer, got } = pair()
+    const t = new FakeTransfer()
+    const stop = reportTransferLinks({ room: viewer.asRoom(), hostId: HOST, transfer: t.asEngine(), log: quiet() })
+    expect(got[0]?.body).not.toHaveProperty('hashFails') // what an older host reads, unchanged
+    t.fails = {
+      total: 4,
+      worst: [
+        [7, 3],
+        [2, 1],
+      ],
+    }
+    vi.advanceTimersByTime(REPORT_MS)
+    expect((got[1]?.body as TransferLinks).hashFails).toEqual({
+      total: 4,
+      worst: [
+        [7, 3],
+        [2, 1],
+      ],
+    })
+    t.fails = { total: 40, worst: Array.from({ length: 20 }, (_, i): [number, number] => [i, 2]) }
+    vi.advanceTimersByTime(REPORT_MS)
+    expect((got[2]?.body as TransferLinks).hashFails?.worst).toHaveLength(MAX_REPORTED_HASH_FAILS)
+    stop()
+  })
+
   it('keeps trying while the host cannot be reached, and says so once', () => {
     vi.useFakeTimers()
     const { viewer, got } = pair()
@@ -204,11 +237,16 @@ describe('collectTransferLinks (host)', () => {
   const CC = 'cc'.repeat(32)
   const DD = 'dd'.repeat(32)
 
-  function host(): { host: FakeRoom; viewer: FakeRoom; t: FakeTransfer; stop: () => void } {
+  function host(hashFails?: HashFailWatch): { host: FakeRoom; viewer: FakeRoom; t: FakeTransfer; stop: () => void } {
     const { host, viewer } = pair()
     host.memberIds = [HOST, viewer.self, CC]
     const t = new FakeTransfer()
-    const stop = collectTransferLinks({ room: host.asRoom(), transfer: t.asEngine(), log: quiet() })
+    const stop = collectTransferLinks({
+      room: host.asRoom(),
+      transfer: t.asEngine(),
+      log: quiet(),
+      ...(hashFails ? { hashFails } : {}),
+    })
     return { host, viewer, t, stop }
   }
 
@@ -265,6 +303,53 @@ describe('collectTransferLinks (host)', () => {
     const n = t.urgent.length
     report(viewer, { v: 1, linked: [], urgent: [1] })
     expect(t.urgent).toHaveLength(n + 1)
+    stop()
+  })
+
+  it("feeds a member's hash failures to the watch, pieces of the torrent only; warns on a piece failing again", () => {
+    const alert = vi.fn()
+    const watch = new HashFailWatch(alert)
+    const update = vi.spyOn(watch, 'update')
+    const { host: h, viewer, stop } = host(watch)
+    report(viewer, { v: 1, linked: [], urgent: [] })
+    expect(update).toHaveBeenLastCalledWith(viewer.self, { total: 0, worst: [] })
+    // 100 is past the 100 pieces: a member's claim about it is dropped
+    report(viewer, {
+      v: 1,
+      linked: [],
+      urgent: [],
+      hashFails: {
+        total: 7,
+        worst: [
+          [100, 5],
+          [4, 2],
+        ],
+      },
+    })
+    expect(update).toHaveBeenLastCalledWith(viewer.self, { total: 7, worst: [[4, 2]] })
+    expect(alert).not.toHaveBeenCalled()
+    report(viewer, { v: 1, linked: [], urgent: [], hashFails: { total: 8, worst: [[4, 3]] } })
+    expect(alert).toHaveBeenCalledTimes(1)
+    expect([...watch.warnings().keys()]).toEqual([viewer.self])
+    h.emit('peer-gone', viewer.self)
+    expect(watch.warnings().size).toBe(0)
+    stop()
+  })
+
+  it('drops a report whose hash failures are malformed, links and all', () => {
+    const watch = new HashFailWatch(() => undefined)
+    const update = vi.spyOn(watch, 'update')
+    const { viewer, t, stop } = host(watch)
+    const bad: unknown[] = [
+      { total: -1, worst: [] },
+      { total: 1, worst: [[1, 0]] },
+      { total: 1, worst: [[1.5, 1]] },
+      { total: 1 },
+      { total: 9, worst: Array.from({ length: MAX_REPORTED_HASH_FAILS + 1 }, (_, i) => [i, 1]) },
+    ]
+    for (const hashFails of bad) report(viewer, { v: 1, linked: [CC], urgent: [], hashFails })
+    expect(update).not.toHaveBeenCalled()
+    expect(t.links).toEqual([])
     stop()
   })
 

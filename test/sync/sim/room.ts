@@ -16,6 +16,8 @@ export interface NodeSpec {
   mpv?: Partial<MpvOpts>
   media?: Partial<MediaOpts>
   nudge?: boolean
+  /** the user's desync warning setting (SyncEngineOptions.desyncWarnMs); off when absent */
+  desyncWarnMs?: number
   /** false: datagrams unusable (via-peer member, or relayed link without datagrams) */
   datagrams?: boolean
 }
@@ -189,6 +191,7 @@ export class SimRoom {
       selfName: name,
       hostId: HOST,
       nudge: spec.nudge ?? true,
+      ...(spec.desyncWarnMs === undefined ? {} : { desyncWarnMs: spec.desyncWarnMs }),
       ports: {
         clock,
         player: mpv,

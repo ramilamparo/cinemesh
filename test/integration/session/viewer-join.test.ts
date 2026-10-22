@@ -32,8 +32,8 @@ import { type Client, type Member, member } from './harness.js'
 // join (viewer-leave-flashes-error, room-closed-overwritten-in-room, viewer-startdownload-no-stop-checks,
 // leave-not-reentrant), admission while the host prepares (viewer-admitted-still-pending), JoinConfirm's
 // haveBytes with a subtitle piece and with segments gone (havebytes-*), a second Join click and a space
-// check that fails after a leave or a close, a manifest with thousands of critical ranges, the upload limit
-// changed while the download starts, the host's file-gone notice, an announce the viewer cannot read (a
+// check that fails after a leave or a close, a manifest with thousands of critical ranges, the upload and download
+// limits changed while the download starts, the host's file-gone notice, an announce the viewer cannot read (a
 // newer host, a manifest over the cap), the player's blocked-reader hook, the striping reports to the host
 // (and their end), and a failed join staying failed. The slow-disk cases hold a write (or a read) on a named
 // pipe.
@@ -47,7 +47,12 @@ const quiet: NetLog = { debug: () => undefined, info: () => undefined, warn: () 
 
 interface Internals {
   settings: Settings
-  current: { transfer: { client: { _uploadLimit: number } | null } | null } | null
+  current: {
+    transfer: {
+      client: { _uploadLimit: number } | null
+      torrent: { _requestGate: { rateBps: number | null } | null } | null
+    } | null
+  } | null
 }
 const internals = (m: Member): Internals => m.manager as unknown as Internals
 
@@ -658,6 +663,40 @@ describe('viewer join path', () => {
       await slow.drain()
       await viewer.client.until('session', (s) => s.phase === 'in-room')
       expect(internals(viewer).current?.transfer?.client?._uploadLimit).toBe(123 * 1024)
+      await viewer.client.request('session.leave', { data: 'delete' })
+    },
+  )
+
+  it.skipIf(process.platform === 'win32')(
+    'a download limit changed while the download starts applies to it, and later changes apply live',
+    async () => {
+      // an engine that drops a limit set before its torrent exists: the session must not rely on the engine keeping it
+      const spy = vi.spyOn(TransferEngine.prototype, 'setDownloadLimit').mockImplementation(function (
+        this: TransferEngine,
+        kbps: number | null,
+      ) {
+        const gate = (this as unknown as { downloadGate: { setRate(bps: number | null): void } | null }).downloadGate
+        gate?.setRate(kbps ? kbps * 1024 : null)
+      })
+      cleanups.push(() => spy.mockRestore())
+      const gateRate = (): number | null | undefined =>
+        internals(viewer).current?.transfer?.torrent?._requestGate?.rateBps
+      const { host, viewer } = await atConfirm()
+      const saveDir = join(viewer.dir, 'save')
+      const slow = blockDownloadStart(saveDir, host.infoHash)
+      cleanups.push(slow.unblock)
+      await viewer.client.request('session.confirmJoin', { dir: saveDir })
+      await downloadStarting(viewer) // joinAsViewer has its options: the change must come from the session again
+      // Settings, while joinAsViewer is held before it creates the torrent
+      viewer.manager.updateSettings({ ...internals(viewer).settings, downloadLimitKBps: 123 })
+      await slow.drain()
+      await viewer.client.until('session', (s) => s.phase === 'in-room')
+      expect(gateRate()).toBe(123 * 1024)
+      // in the room (the viewer's Room card, or Settings)
+      viewer.manager.updateSettings({ ...internals(viewer).settings, downloadLimitKBps: null })
+      expect(gateRate()).toBeNull()
+      viewer.manager.updateSettings({ ...internals(viewer).settings, downloadLimitKBps: 64 })
+      expect(gateRate()).toBe(64 * 1024)
       await viewer.client.request('session.leave', { data: 'delete' })
     },
   )

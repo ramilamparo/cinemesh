@@ -41,6 +41,55 @@ describe('Settings overlay', () => {
     expect(queryByRole(m.container, 'dialog', 'Settings')).toBeNull()
   })
 
+  it('warns when behind after the seconds typed, and not at all when switched off', async () => {
+    m = await mountApp('home')
+    let dialog = await open()
+    const seconds = (): HTMLInputElement => byLabel(dialog, 'Seconds behind before warning') as HTMLInputElement
+    expect(seconds().disabled).toBe(false)
+    expect(seconds().value).toBe('1')
+    await typeInto(seconds(), '0.2')
+    await click(byRole(dialog, 'button', /^Save$/))
+    expect(text(dialog)).toContain('Seconds must be between 0.5 and 30.')
+    expect(m.fake.appCalls.filter((c) => c.method === 'setSettings')).toEqual([])
+    // switched off, the field's error no longer applies (off saves 0 whatever it holds): it goes, footer and all
+    const warn = byRole(dialog, 'switch', 'Warn when I fall behind')
+    await click(warn)
+    expect(text(dialog)).not.toContain('Seconds must be between')
+    expect(text(dialog)).not.toContain('Fix the highlighted fields.')
+    expect(seconds().getAttribute('aria-invalid')).toBeNull()
+    await click(warn)
+    expect(seconds().disabled).toBe(false)
+    await typeInto(seconds(), '2')
+    await click(byRole(dialog, 'button', /^Save$/))
+    expect(m.fake.settings.desyncWarnMs).toBe(2000)
+
+    dialog = await open()
+    expect(seconds().value).toBe('2')
+    await click(byRole(dialog, 'switch', 'Warn when I fall behind'))
+    expect(seconds().disabled).toBe(true)
+    await click(byRole(dialog, 'button', /^Save$/))
+    expect(m.fake.settings.desyncWarnMs).toBe(0)
+  })
+
+  it('limits downloads for watching, apart from the upload limit', async () => {
+    m = await mountApp('home')
+    const dialog = await open()
+    const download = byLabel(dialog, 'Download limit (KB/s)')
+    expect(text(dialog)).toContain('Watching only. Empty for no limit.')
+    expect(text(dialog)).toContain('Hosting and watching. Empty for no limit.')
+    await typeInto(download, '0')
+    await click(byRole(dialog, 'button', /^Save$/))
+    expect(text(dialog)).toContain('Download limit must be between 1 and 10000000.')
+    expect(download.getAttribute('aria-invalid')).toBe('true')
+    expect(m.fake.appCalls.filter((c) => c.method === 'setSettings')).toEqual([])
+    await typeInto(download, '500')
+    await click(byRole(dialog, 'button', /^Save$/))
+    expect(m.fake.appCalls.filter((c) => c.method === 'setSettings').map((c) => c.params)).toEqual([
+      [{ downloadLimitKBps: 500 }],
+    ])
+    expect(m.fake.settings).toMatchObject({ downloadLimitKBps: 500, uploadLimitKBps: null })
+  })
+
   it('locates mpv and re-checks it on save', async () => {
     m = await mountApp('home')
     const dialog = await open()

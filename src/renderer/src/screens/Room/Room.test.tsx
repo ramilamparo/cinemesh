@@ -12,6 +12,7 @@ import {
   mountApp,
   queryByRole,
   text,
+  typeInto,
 } from '../../test/harness'
 
 describe('Room', () => {
@@ -172,6 +173,97 @@ describe('Room', () => {
     expect(queryByRole(m.container, 'button', 'Start anyway')).toBeNull()
   })
 
+  it('a viewer behind the host sees how far, and Resync to live asks core once, disabled until it answers', async () => {
+    m = await mountApp('room-viewer-behind')
+    const banner = (): string => text(m?.container)
+    expect(banner()).toContain("You're 3.5 s behind the host")
+    expect(banner()).not.toContain('(buffering)')
+    let answer: (v: { outcome: 'skip' }) => void = () => undefined
+    m.fake.handle('playback.resync', () => new Promise((resolve) => (answer = resolve)))
+    const button = byRole(m.container, 'button', 'Resync to live')
+    expect(button.getAttribute('title')).toBe('Jump to where the host is now')
+    await click(button)
+    expect(callsOf(m.fake, 'playback.resync')).toEqual([{}])
+    expect((button as HTMLButtonElement).disabled).toBe(true)
+    await click(button)
+    expect(callsOf(m.fake, 'playback.resync')).toHaveLength(1)
+    await act(async () => {
+      answer({ outcome: 'skip' })
+      await Promise.resolve()
+    })
+    await flush()
+    expect((byRole(m.container, 'button', 'Resync to live') as HTMLButtonElement).disabled).toBe(false)
+    // a catch-up shows itself: no toast
+    expect(text(byRole(m.container, 'region', 'Notifications'))).toBe('')
+  })
+
+  it('the desync banner says when the viewer is buffering, and shows the catch-up without a button', async () => {
+    m = await mountApp('room-viewer-behind')
+    const pb = m.fake.state.playback
+    if (pb) act(() => m?.fake.emit('playback', { ...pb, stalled: true }))
+    await flush()
+    expect(text(m.container)).toContain("You're 3.5 s behind the host (buffering)")
+    act(() => m?.fake.emit('sync', fx.sync('viewer', { mode: 'playing', desync: { state: 'catching-up' } })))
+    await flush()
+    expect(text(m.container)).toContain('Resyncing with the host…')
+    expect(queryByRole(m.container, 'button', 'Resync to live')).toBeNull()
+  })
+
+  it('the desync banner announces its state, not every new number while a stall grows', async () => {
+    m = await mountApp('room-viewer-behind')
+    const banner = (): Element => {
+      const el = m?.container.querySelector('[data-testid="desync-banner"]')
+      if (!el) throw new Error('no desync banner')
+      return el
+    }
+    // what a screen reader is pushed: every live region in the banner, the banner itself included
+    const announced = (): string[] =>
+      [banner(), ...banner().querySelectorAll('*')]
+        .filter((el) => el.matches('[role="status"], [role="alert"], [aria-live]'))
+        .map((el) => text(el))
+    expect(announced()).toEqual(["You're behind the host"])
+    for (const behindS of [4, 4.5, 5]) {
+      act(() => m?.fake.emit('sync', fx.sync('viewer', { mode: 'playing', desync: { state: 'behind', behindS } })))
+      await flush()
+      expect(text(banner())).toContain(`You're ${String(behindS)} s behind the host`)
+      expect(announced()).toEqual(["You're behind the host"])
+    }
+    act(() => m?.fake.emit('sync', fx.sync('viewer', { mode: 'playing', desync: { state: 'catching-up' } })))
+    await flush()
+    expect(announced()).toEqual(['Resyncing with the host…'])
+  })
+
+  it('Resync to live when there is nothing to do says so', async () => {
+    m = await mountApp('room-viewer-behind')
+    m.fake.handle('playback.resync', () => ({ outcome: 'in-sync' }))
+    await click(byRole(m.container, 'button', 'Resync to live'))
+    expect(text(byRole(m.container, 'region', 'Notifications'))).toContain("You're already in sync.")
+  })
+
+  it('no desync banner for the host, a room that does not play, or a room that closed', async () => {
+    const behind = { state: 'behind' as const, behindS: 4 }
+    m = await mountApp('room-host')
+    act(() => m?.fake.emit('sync', fx.sync('host', { mode: 'playing', desync: behind })))
+    await flush()
+    expect(text(m.container)).not.toContain('behind the host')
+    await m.cleanup()
+
+    m = await mountApp('room-viewer-behind')
+    expect(text(m.container)).toContain('behind the host')
+    act(() => m?.fake.emit('sync', fx.sync('viewer', { mode: 'paused', desync: behind })))
+    await flush()
+    expect(text(m.container)).not.toContain('behind the host')
+    act(() => m?.fake.emit('sync', fx.sync('viewer', { mode: 'playing', desync: behind })))
+    await flush()
+    expect(text(m.container)).toContain("You're 4 s behind the host")
+    act(() => {
+      const s = m?.fake.state.session
+      if (s) m?.fake.emit('session', { ...s, phase: 'ended' })
+    })
+    await flush()
+    expect(text(m.container)).not.toContain('behind the host')
+  })
+
   it('host panel shows the feasibility line from prepare events, with a warning when upload is short', async () => {
     m = await mountApp('room-host')
     const panel = byRole(m.container, 'region', 'Host controls')
@@ -185,6 +277,117 @@ describe('Room', () => {
     act(() => m?.fake.emit('prepare', { ...prepare, feasibility: { needBps: 500_000, uploadBps: 4_400_000 } }))
     await flush()
     expect(panel.querySelector('[data-testid="feasibility"]')?.getAttribute('data-short')).toBeNull()
+  })
+
+  it("names the host's upload limit in the feasibility line when the limit is what holds the upload back", async () => {
+    m = await mountApp('room-host', { settings: { uploadLimitKBps: 100 } })
+    const panel = byRole(m.container, 'region', 'Host controls')
+    const prepare = { stage: 'ready' as const, bytesDone: 1, bytesTotal: 1, bytesPerSec: 0, cached: false }
+    act(() => m?.fake.emit('prepare', { ...prepare, feasibility: { needBps: 2_900_000, uploadBps: 102_400 } }))
+    await flush()
+    const line = panel.querySelector('[data-testid="feasibility"]')
+    expect(text(line as Element)).toContain('Group needs ~23 Mbit/s from you; your upload limit ~0.8 Mbit/s')
+    expect(text(line as Element)).toContain('Raise or clear the upload limit')
+    expect(line?.getAttribute('data-short')).toBe('true')
+  })
+
+  it('the host edits its upload limit live, and has no download limit', async () => {
+    m = await mountApp('room-host')
+    const panel = byRole(m.container, 'region', 'Host controls')
+    expect(text(panel)).toContain('Usually not needed: sending already slows down when your connection is full.')
+    expect(() => byLabel(m?.container ?? document.body, 'Download limit')).toThrow()
+    expect(queryByRole(m.container, 'region', 'Your connection')).toBeNull()
+    const input = byLabel(panel, 'Upload limit')
+    await typeInto(input, '300')
+    await key(input, 'Enter')
+    expect(m.fake.appCalls.filter((c) => c.method === 'setSettings').map((c) => c.params)).toEqual([
+      [{ uploadLimitKBps: 300 }],
+    ])
+  })
+
+  it('a viewer sets its download and upload limits live from Your connection', async () => {
+    m = await mountApp('room-viewer')
+    const card = byRole(m.container, 'region', 'Your connection')
+    const saved = (): unknown[] => m?.fake.appCalls.filter((c) => c.method === 'setSettings').map((c) => c.params) ?? []
+    const download = byLabel(card, 'Download limit (KB/s)') as HTMLInputElement
+    expect(download.value).toBe('')
+    expect(download.placeholder).toBe('No limit')
+    await typeInto(download, '300')
+    await key(download, 'Enter')
+    expect(saved()).toEqual([[{ downloadLimitKBps: 300 }]])
+    expect(m.fake.settings.downloadLimitKBps).toBe(300)
+    expect(download.value).toBe('300')
+    // the same value again, or leaving the field untouched: nothing to save
+    await typeInto(download, ' 300 ')
+    await key(download, 'Enter')
+    download.focus()
+    act(() => download.blur())
+    await flush()
+    expect(saved()).toHaveLength(1)
+    // a bad value says why and saves nothing; so does one Settings would reject later (its bound is the same)
+    for (const bad of ['1.5', '0', '20000000', '99999999999999999999']) {
+      await typeInto(download, bad)
+      await key(download, 'Enter')
+      expect(text(card)).toContain('Use a whole number of KB/s up to 10000000, or leave empty for no limit.')
+      expect(download.getAttribute('aria-invalid')).toBe('true')
+    }
+    expect(saved()).toHaveLength(1)
+    // empty clears it, on leaving the field
+    await typeInto(download, '')
+    download.focus()
+    act(() => download.blur())
+    await flush()
+    expect(saved().at(-1)).toEqual([{ downloadLimitKBps: null }])
+    expect(text(card)).not.toContain('Use a whole number')
+    const upload = byLabel(card, 'Upload limit (KB/s)')
+    await typeInto(upload, '200')
+    await key(upload, 'Enter')
+    expect(saved().at(-1)).toEqual([{ uploadLimitKBps: 200 }])
+    expect(text(card)).toContain('Changes apply now and are kept for next time.')
+  })
+
+  it("a viewer's download limit is held against the video's bitrate", async () => {
+    // the fixture's file: 58.2 GB over 90 min, ~86 Mbit/s
+    m = await mountApp('room-viewer', { settings: { downloadLimitKBps: 100 } })
+    const note = (): string | null => {
+      const el = m?.container.querySelector('[data-testid="bitrate-note"]')
+      return el ? text(el) : null
+    }
+    expect(note()).toBe("⚠ Warning: Below this video's bitrate (~86 Mbit/s): playback will pause to buffer.")
+    const download = byLabel(m.container, 'Download limit (KB/s)')
+    // 11.3 MB/s: above the average but below 1.1 × it, where core's slow-download warning would never clear
+    await typeInto(download, '11000')
+    await key(download, 'Enter')
+    expect(note()).toBe("⚠ Warning: Close to this video's bitrate (~86 Mbit/s): playback may pause to buffer.")
+    await typeInto(download, '20000') // 20.5 MB/s, above 1.1 × 10.8 MB/s
+    await key(download, 'Enter')
+    expect(note()).toBe('This video needs about 86 Mbit/s.')
+    await typeInto(download, '')
+    await key(download, 'Enter')
+    expect(note()).toBeNull()
+  })
+
+  it("the viewer's transfer line says (limited) only while a download limit is set", async () => {
+    m = await mountApp('room-viewer', { settings: { downloadLimitKBps: 500 } })
+    const line = (): string => text(byRole(m?.container ?? document.body, 'region', 'Timeline'))
+    expect(line()).toContain('(limited)')
+    const download = byLabel(m.container, 'Download limit (KB/s)')
+    await typeInto(download, '')
+    await key(download, 'Enter')
+    expect(line()).not.toContain('(limited)')
+  })
+
+  it('a viewer typing a limit does not play, pause or seek', async () => {
+    m = await mountApp('room-viewer')
+    act(() => m?.fake.emit('sync', fx.sync('viewer', { canPlayPause: true, canSeek: true })))
+    await flush()
+    await key(document.body, ' ')
+    expect(callsOf(m.fake, 'playback.intent')).toEqual([{ kind: 'toggle' }])
+    const input = byLabel(m.container, 'Download limit')
+    input.focus()
+    await key(input, ' ')
+    await key(input, 'ArrowRight')
+    expect(callsOf(m.fake, 'playback.intent')).toHaveLength(1)
   })
 
   it('copies the invite text block', async () => {

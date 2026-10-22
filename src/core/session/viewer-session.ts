@@ -1,19 +1,21 @@
+import { lstat, readFile } from 'node:fs/promises'
 import { join, resolve } from 'node:path'
 import { z } from 'zod'
 import type { NoticeEvent, SessionPhase } from '../../shared/ipc/core.js'
+import { limitBps } from '../../shared/limits.js'
 import { decodeManifest } from '../../shared/media/manifest.js'
 import { MediaMap, needsFullDownload } from '../../shared/media/media-map.js'
 import { type ByteRange, KEYFRAME_MIN_GAP_MS, type KeyPoint, type Manifest } from '../../shared/media/types.js'
 import { CodedError } from '../../shared/result.js'
 import { Playhead, type PlayheadReason as MediaPlayheadReason } from '../media/playhead.js'
 import { StreamServer } from '../media/stream-server.js'
-import { Blobs, MemoryBlobProvider } from '../net/blobs.js'
+import { Blobs, MemoryBlobProvider, blobHash } from '../net/blobs.js'
 import type { RoomRecord } from '../net/identity.js'
 import { Room, type RoomPeer, type RoomState } from '../net/room.js'
 import type { SubtitleSpec } from '../player/player-controller.js'
 import type { PlayheadReason } from '../sync/ports.js'
 import { type SpaceCheck, checkSpace, freeBytes } from '../transfer/disk.js'
-import { type PeerTransferStats, TransferEngine, type TransferStats } from '../transfer/engine.js'
+import { MANIFEST_FILE, type PeerTransferStats, TransferEngine, type TransferStats } from '../transfer/engine.js'
 import { trustedBytes } from '../transfer/resume.js'
 import { exportPending } from '../transfer/save-file.js'
 import { SEGMENT_BYTES } from '../transfer/segment-store.js'
@@ -83,6 +85,19 @@ export function announceError(raw: unknown, issues: readonly { path: readonly Pr
   )
 }
 
+/**
+ * The manifest a previous session of this video kept in its transfer folder (plan §4.2 "Viewer storage"), when it is
+ * the one announced: a regular file of that size and BLAKE2b hash, as Blobs.fetch would check it. Else null, and the
+ * manifest is fetched.
+ */
+export async function cachedManifest(dir: string, want: { hash: string; size: number }): Promise<Uint8Array | null> {
+  const path = join(dir, MANIFEST_FILE)
+  const st = await lstat(path).catch(() => null)
+  if (!st?.isFile() || st.size !== want.size) return null
+  const data = await readFile(path).catch(() => null)
+  return data && blobHash(data) === want.hash ? data : null
+}
+
 /** What the viewer trusts about the download: taken from the torrent itself (the infoHash commits to it). */
 interface TorrentInfo {
   infoHash: string
@@ -131,6 +146,8 @@ export class ViewerSession extends BaseSession {
   private announce: Announce | null = null
   private torrent: Buffer | null = null
   private manifest: Manifest | null = null
+  /** the manifest as announced (hash-checked), kept in the transfer folder for a resume */
+  private manifestBytes: Uint8Array | null = null
   private map: MediaMap | null = null
   private timeline: Timeline | null = null
   private playhead: Playhead | null = null
@@ -269,9 +286,14 @@ export class ViewerSession extends BaseSession {
       const provider = new MemoryBlobProvider()
       this.blobs = new Blobs(this.room, provider)
       const signal = AbortSignal.any([this.abort.signal, AbortSignal.timeout(BLOB_TIMEOUT_MS)])
+      // a resume knows its folder: the manifest kept there at the join, when it is still the announced one
+      const saved = this.resumeFile?.saveDir
+      const blobs = this.blobs
       const [torrent, manifestBytes] = await Promise.all([
-        this.blobs.fetch(a.torrent.hash, { size: a.torrent.size, signal }),
-        this.blobs.fetch(a.manifest.hash, { size: a.manifest.size, signal }),
+        blobs.fetch(a.torrent.hash, { size: a.torrent.size, signal }),
+        (saved ? cachedManifest(join(saved, '.wt-partial', a.infoHash), a.manifest) : Promise.resolve(null)).then(
+          (kept) => kept ?? blobs.fetch(a.manifest.hash, { size: a.manifest.size, signal }),
+        ),
       ])
       const parsedTorrent = await import('parse-torrent').then((m) => m.default(torrent))
       const manifest = decodeManifest(manifestBytes)
@@ -287,6 +309,7 @@ export class ViewerSession extends BaseSession {
         length: parsedTorrent.length,
       }
       this.manifest = manifest
+      this.manifestBytes = manifestBytes
       this.map = new MediaMap(manifest)
       this.timeline = new Timeline(this.map)
       this.fullDownload = needsFullDownload(manifest)
@@ -481,10 +504,17 @@ export class ViewerSession extends BaseSession {
       if (this.sync) this.notice({ level: 'error', code: 'transfer.failed', message: this.transferError.message })
     })
     const s = this.deps.settings()
-    await transfer.joinAsViewer({ torrent, dir: transferDir, uploadLimitKBps: s.uploadLimitKBps })
+    await transfer.joinAsViewer({
+      torrent,
+      ...(this.manifestBytes ? { manifest: this.manifestBytes } : {}),
+      dir: transferDir,
+      uploadLimitKBps: s.uploadLimitKBps,
+      downloadLimitKBps: s.downloadLimitKBps,
+    })
     this.assertLive()
     // a limit changed during the start reached an engine that may not have had a client to apply it to
     transfer.setUploadLimit(this.deps.settings().uploadLimitKBps)
+    transfer.setDownloadLimit(this.deps.settings().downloadLimitKBps)
     const source = transfer.streamSource
     if (!source) throw new Error('no stream source')
 
@@ -571,6 +601,8 @@ export class ViewerSession extends BaseSession {
         etaToEofS: () => this.lastStats?.etaToEofS ?? null,
         coverage: () => this.timeline?.coverage(this.states) ?? null,
         diskFull: () => this.lastStats?.diskLow ?? false,
+        // the host names it in our slow-download warning
+        downLimitBps: () => limitBps(this.deps.settings().downloadLimitKBps),
       }),
     })
     engine.on('sync', (e) => {
@@ -619,6 +651,10 @@ export class ViewerSession extends BaseSession {
 
   protected override applyUploadLimit(kbps: number | null): void {
     this.transfer?.setUploadLimit(kbps)
+  }
+
+  protected override applyDownloadLimit(kbps: number | null): void {
+    this.transfer?.setDownloadLimit(kbps)
   }
 
   /** mpv's demuxer waits in a read of the video (file 0) for a piece: the player reloads instead of seeking. */

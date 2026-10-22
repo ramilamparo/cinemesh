@@ -169,6 +169,8 @@ export interface TransferPort {
   /** 256-bit coverage bitmap (base64), passed through to the host */
   coverage(): string | null
   diskFull(): boolean
+  /** the member's own download limit in bytes/s, null = none; reported to the host, which names it in warnings */
+  downLimitBps?(): number | null
 }
 
 export interface SyncPorts {

@@ -7,8 +7,11 @@ import {
   decodeDatagram,
   encodeDatagram,
   isNewer,
+  isWarningCode,
   parseBusMessage,
   type SyncState,
+  type SyncStatus,
+  WarningCodeSchema,
 } from './protocol.js'
 
 const state: SyncState = {
@@ -24,6 +27,26 @@ const state: SyncState = {
   cause: { by: 'host', kind: 'play', at: 990 },
   members: [{ peerId: 'host', name: 'Host', phase: 'playing', exempt: false }],
   sentAt: 995,
+}
+
+const status: SyncStatus = {
+  t: 'sync.status',
+  syncEpoch: 7,
+  seq: 3,
+  phase: 'playing',
+  barrierId: 2,
+  pos: 12.5,
+  driftMs: -4,
+  bufferedAheadS: 20,
+  rateBps: 775_000,
+  needBps: 1_187_500,
+  coverage: null,
+  canNudge: true,
+  lagMs: 30,
+  clockErrMs: 2,
+  frameDrops: 0,
+  warnings: ['slow-download', 'frame-drops'],
+  etaS: null,
 }
 
 describe('datagrams', () => {
@@ -96,6 +119,42 @@ describe('bus messages', () => {
     expect(parseBusMessage({ t: 'sync.hello', resume: { syncEpoch: 1, seq: 2 } })).not.toBeNull()
     expect(parseBusMessage({ t: 'sync.ping', id: 1, t0: 5 })).not.toBeNull()
     expect(parseBusMessage({ t: 'sync.pong', id: 1, t0: 5, t1: 6 })).toBeNull()
+  })
+
+  it('keeps a status with warning codes it does not know, without them', () => {
+    expect(parseBusMessage(status)).toEqual(status)
+    expect(parseBusMessage({ ...status, warnings: ['slow-download', 'some-future-code'] })).toEqual({
+      ...status,
+      warnings: ['slow-download'],
+    })
+    // still bounded: count, type and length
+    expect(parseBusMessage({ ...status, warnings: Array<string>(9).fill('frame-drops') })).toBeNull()
+    expect(parseBusMessage({ ...status, warnings: [3] })).toBeNull()
+    expect(parseBusMessage({ ...status, warnings: ['x'.repeat(33)] })).toBeNull()
+    for (const code of WarningCodeSchema.options) expect(isWarningCode(code)).toBe(true)
+    expect(isWarningCode('behind')).toBe(false)
+  })
+
+  it('carries how far behind a member is, optionally: older peers neither send nor keep it', () => {
+    expect(parseBusMessage({ ...status, behindS: 2.5 })).toEqual({ ...status, behindS: 2.5 })
+    // an older viewer: no behindS
+    expect(parseBusMessage(status)).not.toHaveProperty('behindS')
+    expect(parseBusMessage({ ...status, behindS: -1 })).toBeNull()
+    expect(parseBusMessage({ ...status, behindS: 'far' })).toBeNull()
+    // what an older host does with it: a field it does not know is dropped, not the status
+    expect(parseBusMessage({ ...status, someFutureField: 1 })).toEqual(status)
+  })
+
+  it("carries the member's own download limit, optionally, like behindS", () => {
+    expect(parseBusMessage({ ...status, downLimitBps: 512_000 })).toEqual({ ...status, downLimitBps: 512_000 })
+    expect(parseBusMessage(status)).not.toHaveProperty('downLimitBps')
+    expect(parseBusMessage({ ...status, downLimitBps: -1 })).toBeNull()
+    expect(parseBusMessage({ ...status, downLimitBps: Number.POSITIVE_INFINITY })).toBeNull()
+    expect(parseBusMessage({ ...status, behindS: 2, downLimitBps: 1024 })).toEqual({
+      ...status,
+      behindS: 2,
+      downLimitBps: 1024,
+    })
   })
 
   it('isNewer: higher seq in the same epoch, or any other epoch', () => {

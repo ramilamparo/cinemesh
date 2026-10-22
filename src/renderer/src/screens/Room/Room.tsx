@@ -1,4 +1,6 @@
+import { useState } from 'react'
 import type { LeaveData } from '../../../../shared/ipc/core'
+import { formatBehindS } from '../../../../shared/peer-warnings'
 import { wt } from '../../bridge'
 import { FullDownloadWait, FullDownloadWarning } from '../../components/FullDownload'
 import { KeepAwakeNote } from '../../components/KeepAwakeNote'
@@ -6,8 +8,9 @@ import { HostMediaNotes, ViewerMediaNote } from '../../components/MediaNotes'
 import { Timeline } from '../../components/Timeline/Timeline'
 import { leaveRoom, openLeavePrompt, saveFile } from '../../leave'
 import { formatEta, formatPercent, formatRate } from '../../lib/format'
-import { call, sendIntent } from '../../rpc'
+import { call, resync, sendIntent } from '../../rpc'
 import { isLeaving, leaveKind, useApp } from '../../store'
+import { ConnectionPanel } from './ConnectionPanel'
 import { CopyInviteButton } from './CopyInviteButton'
 import { HostPanel } from './HostPanel'
 import { LocalPanel } from './LocalPanel'
@@ -50,6 +53,7 @@ export function Room(): React.JSX.Element {
 
         {leaving ? null : closed ? <ClosedCard isHost={isHost} /> : videoEnded && <EndedCard isHost={isHost} />}
         <WaitBanner />
+        {!isHost && !leaving && <DesyncBanner />}
         {/* hidden while leaving: core keeps media on its 'leaving' event */}
         {leaving ? null : isHost ? (
           <>
@@ -71,7 +75,7 @@ export function Room(): React.JSX.Element {
           <PeerList />
           <div className={styles.side}>
             <LocalPanel />
-            {isHost && <HostPanel />}
+            {isHost ? <HostPanel /> : <ConnectionPanel />}
           </div>
         </div>
       </fieldset>
@@ -106,6 +110,8 @@ function LeavingBanner(): React.JSX.Element {
 
 function TransferLine(): React.JSX.Element | null {
   const t = useApp((s) => s.core.transfer)
+  // KiB/s against the rate's decimal KB/s: a 500 limit reads ~512 KB/s, so the line names no number
+  const limited = useApp((s) => (s.settings?.downloadLimitKBps ?? null) !== null)
   if (!t) return null
   return (
     <p className={styles.transferLine}>
@@ -113,6 +119,7 @@ function TransferLine(): React.JSX.Element | null {
       <span>
         <span aria-hidden="true">↓</span>
         <span className="visually-hidden">Download</span> {formatRate(t.downBps)}
+        {limited && <span className="muted"> (limited)</span>}
       </span>
       <span>
         <span aria-hidden="true">↑</span>
@@ -161,6 +168,58 @@ export function WaitBanner(): React.JSX.Element | null {
         <button type="button" className="small" onClick={() => void call('sync.startAnyway', {})}>
           Start anyway
         </button>
+      )}
+    </div>
+  )
+}
+
+/**
+ * This viewer is behind the host (Settings: Warn when I fall behind). Core decides when (sync.desync); the banner
+ * shows it while the room plays, with Resync to live, and the catch-up that follows. Only the state is announced:
+ * the number changes up to twice a second while a stall grows, so it stays out of the live region.
+ */
+export function DesyncBanner(): React.JSX.Element | null {
+  const desync = useApp((s) => s.core.sync?.desync)
+  const playing = useApp((s) => s.core.sync?.mode === 'playing')
+  // as for the wait banner: the last sync event of a room that closed must not keep it up
+  const inRoom = useApp((s) => s.core.session?.phase === 'in-room')
+  const viewer = useApp((s) => s.core.session?.role === 'viewer')
+  const stalled = useApp((s) => s.core.playback?.stalled ?? false)
+  const [pending, setPending] = useState(false)
+  if (!desync || !playing || !inRoom || !viewer) return null
+  const run = async (): Promise<void> => {
+    setPending(true)
+    try {
+      await resync()
+    } finally {
+      setPending(false)
+    }
+  }
+  const behind = desync.state === 'behind'
+  return (
+    <div className={styles.banner} data-testid="desync-banner">
+      <span role="status" className="visually-hidden" data-testid="desync-status">
+        {behind ? "You're behind the host" : 'Resyncing with the host…'}
+      </span>
+      {behind ? (
+        <>
+          <span aria-hidden="true">⚠</span>
+          <span>{`You're ${formatBehindS(desync.behindS)} behind the host${stalled ? ' (buffering)' : ''}`}</span>
+          <button
+            type="button"
+            className="small"
+            title="Jump to where the host is now"
+            disabled={pending}
+            onClick={() => void run()}
+          >
+            Resync to live
+          </button>
+        </>
+      ) : (
+        <>
+          <span className={styles.spinnerSmall} aria-hidden="true" />
+          <span aria-hidden="true">Resyncing with the host…</span>
+        </>
       )}
     </div>
   )

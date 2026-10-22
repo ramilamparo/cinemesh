@@ -1,5 +1,10 @@
 import { describe, expect, it } from 'vitest'
 import { SYNC_BUS_POLICIES } from '../../src/core/session/sync-ports.js'
+import type { MemberView } from '../../src/core/net/room.js'
+import { mergePeerViews } from '../../src/core/session/peer-view.js'
+import type { PeerSync } from '../../src/core/sync/engine.js'
+import { MEMBER } from '../../src/core/sync/member.js'
+import { peerWarningText } from '../../src/shared/peer-warnings.js'
 import { HOST, SimRoom } from './sim/room.js'
 
 // §9 sync simulator row 5 plus the permission, intent and enforcement paths of §4.5.
@@ -299,5 +304,66 @@ describe('control', () => {
     room.run(1000)
     await settle()
     expect(await c).toEqual({ accepted: true })
+  })
+
+  it("a viewer downloading slower than the bitrate shows as slow in the host's rows; a fast one does not", () => {
+    const viewer = (id: string, rateX: number) => ({ id, media: { complete: false, rateX, firstByteMs: 100 } })
+    const room = new SimRoom({
+      seed: 16,
+      link: flat,
+      waitForAll: false,
+      viewers: [viewer('v1', 0.6), viewer('v2', 1.5)],
+    })
+    let rows: PeerSync[] = []
+    room.host.engine.on('peers', (p) => (rows = p))
+    room.start()
+    room.run(2000)
+    void room.intent(HOST, { kind: 'play' })
+    // 15 s below 1.1 × need, counted from its first status, then a status and a peers tick to reach the row
+    room.run(MEMBER.SLOW_RATE_MS + 2000)
+    const slow = rows.find((p) => p.id === 'v1')
+    expect(slow?.warnings).toEqual(['slow-download'])
+    expect((slow?.rateBps ?? 0) / (slow?.needBps ?? 1)).toBeCloseTo(0.6, 2)
+    expect(rows.find((p) => p.id === 'v2')?.warnings).toEqual([])
+  })
+
+  it("the host's warning names a slow viewer's own download limit; no limit, no mention", () => {
+    // v1 downloads at its limit, 0.6 × the bitrate; v2 is as slow without one
+    const viewer = (id: string, downLimitBps: number | null) => ({
+      id,
+      media: { complete: false, rateX: 0.6, firstByteMs: 100, downLimitBps },
+    })
+    const room = new SimRoom({
+      seed: 17,
+      link: flat,
+      waitForAll: false,
+      viewers: [viewer('v1', 600_000), viewer('v2', null)],
+    })
+    let rows: PeerSync[] = []
+    room.host.engine.on('peers', (p) => (rows = p))
+    room.start()
+    room.run(2000)
+    void room.intent(HOST, { kind: 'play' })
+    room.run(MEMBER.SLOW_RATE_MS + 2000)
+    const [limited, plain] = ['v1', 'v2'].map((id) => rows.find((p) => p.id === id))
+    expect(limited).toMatchObject({ warnings: ['slow-download'], downLimitBps: 600_000 })
+    expect(plain).toMatchObject({ warnings: ['slow-download'], downLimitBps: null })
+    // what the host's peer list and OSC say
+    const net = (id: string): MemberView => ({
+      id,
+      name: id,
+      role: 'viewer',
+      self: false,
+      isHost: false,
+      path: 'direct',
+      rttMs: 40,
+      linked: true,
+    })
+    const text = (row: PeerSync | undefined): string[] =>
+      row ? (mergePeerViews([net(row.id)], [row], [])[0]?.warnings.map(peerWarningText) ?? []) : []
+    expect(text(limited)).toEqual([
+      expect.stringMatching(/^Download too slow \(4\.8 of 8\.0 Mbit\/s, limit 4\.8 Mbit\/s\)/),
+    ])
+    expect(text(plain)).toEqual([expect.stringMatching(/^Download too slow \(4\.8 of 8\.0 Mbit\/s\)/)])
   })
 })

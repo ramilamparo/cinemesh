@@ -92,6 +92,11 @@ export const SCENARIOS = {
       }),
     }
   },
+  // this viewer fell behind the host while the room plays: the desync banner with Resync to live
+  'room-viewer-behind': () => {
+    const s = fx.inRoom('viewer', now())
+    return { ...s, sync: fx.sync('viewer', { mode: 'playing', desync: { state: 'behind' as const, behindS: 3.5 } }) }
+  },
   // the video reached its end; the room stays open (sync mode 'ended', phase still 'in-room')
   'ended-host': () => {
     const s = fx.inRoom('host', now())

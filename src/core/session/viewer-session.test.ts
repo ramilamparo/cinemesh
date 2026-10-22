@@ -1,10 +1,22 @@
+import { mkdirSync, mkdtempSync, rmSync, writeFileSync } from 'node:fs'
+import { tmpdir } from 'node:os'
+import { join } from 'node:path'
 import bencode from 'bencode'
 import parseTorrent from 'parse-torrent'
-import { describe, expect, it } from 'vitest'
+import { afterAll, describe, expect, it } from 'vitest'
 import { buildManifest, decodeManifest, encodeManifest } from '../../shared/media/manifest.js'
 import type { ByteRange, KeyPoint, Manifest, MediaIndex, TrackInfo } from '../../shared/media/types.js'
 import { CodedError } from '../../shared/result.js'
-import { AnnounceSchema, MAX_CRITICAL_SPANS, announceError, crossCheck, criticalSpans } from './viewer-session.js'
+import { blobHash } from '../net/blobs.js'
+import { MANIFEST_FILE } from '../transfer/engine.js'
+import {
+  AnnounceSchema,
+  MAX_CRITICAL_SPANS,
+  announceError,
+  cachedManifest,
+  crossCheck,
+  criticalSpans,
+} from './viewer-session.js'
 
 // crossCheck guards the viewer core against a host whose announce, torrent and manifest disagree: nothing
 // the host merely states may size a buffer, a journal or a folder (manifest-torrent-not-crosschecked,
@@ -348,3 +360,32 @@ function tracks(n: number): TrackInfo[] {
     height: 0,
   }))
 }
+
+describe('cachedManifest', () => {
+  const root = mkdtempSync(join(tmpdir(), 'wt-cached-manifest-'))
+  afterAll(() => rmSync(root, { recursive: true, force: true }))
+  const bytes = Buffer.from('a manifest, as the host announced it')
+  const want = { hash: blobHash(bytes), size: bytes.byteLength }
+  const folder = (name: string, content?: Buffer): string => {
+    const dir = join(root, name)
+    mkdirSync(dir, { recursive: true })
+    if (content) writeFileSync(join(dir, MANIFEST_FILE), content)
+    return dir
+  }
+
+  it('returns the kept manifest when it is the one announced', async () => {
+    expect(await cachedManifest(folder('same', bytes), want)).toEqual(bytes)
+  })
+
+  it('returns null for anything else, so the manifest is fetched', async () => {
+    const flipped = Buffer.from(bytes)
+    flipped[0] = (flipped[0] ?? 0) ^ 1
+    expect(await cachedManifest(folder('other-bytes', flipped), want)).toBeNull() // same size, other hash
+    expect(await cachedManifest(folder('torn', bytes.subarray(0, 10)), want)).toBeNull()
+    expect(await cachedManifest(folder('missing'), want)).toBeNull()
+    expect(await cachedManifest(join(root, 'no-folder'), want)).toBeNull()
+    const dir = folder('a-folder')
+    mkdirSync(join(dir, MANIFEST_FILE))
+    expect(await cachedManifest(dir, want)).toBeNull()
+  })
+})

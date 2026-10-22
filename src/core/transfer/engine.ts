@@ -5,6 +5,7 @@ import type Protomux from 'protomux'
 import WebTorrent, { type Torrent, type Wire } from 'webtorrent'
 import { WEBTORRENT_OPTIONS } from './client-options.js'
 import { DISK_RESERVE_BYTES, freeBytes } from './disk.js'
+import { DownloadGate } from './download-gate.js'
 import { JOURNAL_FILE, Journal } from './journal.js'
 import { BT_PROTOCOL, MuxWireStream } from './mux-wire-stream.js'
 import { PieceSource } from './piece-source.js'
@@ -16,6 +17,7 @@ import { MAX_URGENT, Revealer } from './revealer.js'
 import { IncompleteDownloadError, type SavedFiles, saveFile } from './save-file.js'
 import { type ByteRange, type PlayheadPlan, Scheduler } from './scheduler.js'
 import { SEGMENT_BYTES, SegmentStore } from './segment-store.js'
+import { limitBps } from '../../shared/limits.js'
 import { CodedError } from '../../shared/result.js'
 import { SourceFiles } from './source-files.js'
 import { type PacedStream, type PacerState, UploadPacer } from './upload-pacer.js'
@@ -55,7 +57,17 @@ export interface TransferStats {
   /** host: the upload scheduler's rate and the pacer's view of the uplink (ADR 0006) */
   uplink?: UplinkStats
   diskLow: boolean
+  /** viewer: downloaded pieces that failed their hash check (plan §4.2 "Source-change watchdog") */
+  hashFails?: HashFailStats
   peers: PeerTransferStats[]
+}
+
+/** A viewer's hash failures since its join: data that reached it but did not match the torrent. */
+export interface HashFailStats {
+  /** failed checks, all pieces together (a piece that failed twice counts twice) */
+  total: number
+  /** [piece, failures] of the pieces that failed most, most first (then lowest piece); MAX_HASH_FAIL_PIECES at most */
+  worst: [number, number][]
 }
 
 export interface UplinkStats {
@@ -125,6 +137,15 @@ const MAX_REQUEST_BYTES = 128 * 1024
 // ~1 s of the wire's rate (torrent.js:2207-2219) and bittorrent-protocol answers all of it at once, so the
 // uploader holds ~1 s of upload in RAM (S2: host RSS +207 MB at 132 MB/s; with 256: +95 MB, same rate).
 export const REQQ = 256
+/** how many pieces HashFailStats.worst names */
+export const MAX_HASH_FAIL_PIECES = 8
+/** The viewer's copy of the session manifest (plan §4.2 "Viewer storage"), beside meta.torrent; a resume reads it. */
+export const MANIFEST_FILE = 'manifest.bin'
+/**
+ * WebTorrent's only sign of a downloaded piece that failed its hash check (torrent.js:2010, 3.0.21): the piece is
+ * reset and fetched again, nothing else is emitted. Pinned with the version; an integration test fails if it changes.
+ */
+const HASH_FAIL_WARNING = /^Piece (\d+) failed verification$/
 
 /**
  * The transfer module's facade (plan §5.3 "transfer"): one WebTorrent client per session, running only
@@ -156,6 +177,9 @@ export class TransferEngine extends EventEmitter<TransferEvents> {
   private piecesDirty = false
   private playheadByte = 0
   private diskLow = false
+  /** viewer: piece -> how often it failed its hash check (at most one entry per piece) */
+  private readonly hashFails = new Map<number, number>()
+  private hashFailTotal = 0
   private servedBlocks: Map<number, Uint8Array> | null = null
   private servedBytes = 0
   private distinctServedBytes = 0
@@ -167,6 +191,10 @@ export class TransferEngine extends EventEmitter<TransferEvents> {
   private torrentClosed = false
   /** the latest limit asked for: the client is created several awaits into a start, and must start with it */
   private uploadLimitKBps: number | null = null
+  /** viewer: the latest download limit asked for, kept the same way */
+  private downloadLimitKBps: number | null = null
+  /** viewer: the download limit, on the requests its torrent sends (ADR 0010); created with the torrent */
+  private downloadGate: DownloadGate | null = null
   /** host: striping, created at 'ready'; the inputs below are kept for it (they may come before) */
   private revealer: Revealer | null = null
   /** host: requests released just in time, urgent first, at the rate below (ADR 0006); created at 'ready' */
@@ -210,17 +238,22 @@ export class TransferEngine extends EventEmitter<TransferEvents> {
   }
 
   /**
-   * Rejects with code 'cancelled' when destroy()/leave() ran before the torrent was ready. The upload limit
-   * is taken now; a setUploadLimit() during the start wins over it.
+   * Rejects with code 'cancelled' when destroy()/leave() ran before the torrent was ready. The limits are
+   * taken now; a setUploadLimit() or setDownloadLimit() during the start wins over them.
    */
   async joinAsViewer(opts: {
     torrent: Buffer
+    /** the session manifest, verified: kept as MANIFEST_FILE beside meta.torrent */
+    manifest?: Uint8Array
     dir: string
     uploadLimitKBps: number | null
+    /** KiB/s; absent, null or 0 = unlimited */
+    downloadLimitKBps?: number | null
   }): Promise<{ resumedPieces: number }> {
     this.begin('viewer')
     this.dir = opts.dir // known at once: a leave({ data: 'delete' }) during the start still finds it
     this.uploadLimitKBps = opts.uploadLimitKBps
+    this.downloadLimitKBps = opts.downloadLimitKBps ?? null
     const run = this.viewerStart(opts)
     this.starting = run.catch(() => undefined)
     return run
@@ -331,6 +364,15 @@ export class TransferEngine extends EventEmitter<TransferEvents> {
   }
 
   /**
+   * Viewer: the downloaded pieces that failed their hash check, reported to the host (striping.ts): the same piece
+   * failing again and again means the host serves bytes that no longer match what it prepared.
+   */
+  hashFailures(): HashFailStats {
+    const worst = [...this.hashFails].sort((a, b) => b[1] - a[1] || a[0] - b[0]).slice(0, MAX_HASH_FAIL_PIECES)
+    return { total: this.hashFailTotal, worst }
+  }
+
+  /**
    * KiB/s; null or 0 = unlimited. Kept for a client that does not exist yet. A host enforces it in its upload
    * scheduler (with the pacer's rate, whichever is lower); a viewer in WebTorrent's upload throttle.
    */
@@ -338,6 +380,15 @@ export class TransferEngine extends EventEmitter<TransferEvents> {
     this.uploadLimitKBps = kbps
     if (this.role === 'host') this.uploadScheduler?.setRate(this.uploadRateBps())
     else this.client?.throttleUpload(kbps ? kbps * 1024 : -1)
+  }
+
+  /**
+   * Viewer: KiB/s; null or 0 = unlimited. Kept for a torrent that does not exist yet. It limits the block requests the
+   * viewer sends (download-gate.ts, ADR 0010), never WebTorrent's read throttle. A host downloads nothing: no effect.
+   */
+  setDownloadLimit(kbps: number | null): void {
+    this.downloadLimitKBps = kbps
+    this.downloadGate?.setRate(limitBps(kbps))
   }
 
   pieceStates(): Uint8Array {
@@ -396,12 +447,17 @@ export class TransferEngine extends EventEmitter<TransferEvents> {
 
   private async viewerStart(opts: {
     torrent: Buffer
+    manifest?: Uint8Array
     dir: string
     uploadLimitKBps: number | null
+    downloadLimitKBps?: number | null
   }): Promise<{ resumedPieces: number }> {
     await mkdir(opts.dir, { recursive: true })
     this.assertLive()
     await writeFile(join(opts.dir, 'meta.torrent'), opts.torrent)
+    // written in the start, so a 'delete' leave (which awaits the start) never races it; a torn copy fails its hash
+    if (opts.manifest) await writeFile(join(opts.dir, MANIFEST_FILE), opts.manifest)
+    this.assertLive()
     const peek = await import('parse-torrent').then((m) => m.default(opts.torrent))
     this.assertLive()
     this.infoHashBuf = Buffer.from(peek.infoHash, 'hex')
@@ -438,6 +494,15 @@ export class TransferEngine extends EventEmitter<TransferEvents> {
       uploads: UPLOAD_SLOTS,
       storeCacheSlots: Math.max(1, Math.floor(CACHE_BYTES / peek.pieceLength)),
     })
+    // before any wire: no request goes out unchecked. The kick re-runs the requests once the gate lets them go
+    const gate = new DownloadGate({
+      kick: () => {
+        if (!t.destroyed) t._update()
+      },
+    })
+    gate.setRate(limitBps(this.downloadLimitKBps))
+    t._requestGate = gate
+    this.downloadGate = gate
     await this.whenReady(t)
     this.assertLive()
     this.files = t.files.map((f) => ({ name: f.name, offset: f.offset, length: f.length }))
@@ -453,6 +518,13 @@ export class TransferEngine extends EventEmitter<TransferEvents> {
       this.emit('verified', i)
     })
     t.on('done', () => this.emit('done'))
+    t.on('warning', (e: unknown) => {
+      const m = e instanceof Error ? HASH_FAIL_WARNING.exec(e.message) : null
+      if (!m) return
+      const i = Number(m[1])
+      this.hashFails.set(i, (this.hashFails.get(i) ?? 0) + 1)
+      this.hashFailTotal++
+    })
     // a resumed download may already be complete: WebTorrent emitted 'done' with 'ready', before any of
     // our listeners; deferred so the caller can subscribe once this resolves
     if (t.pieces.every((p) => p === null)) {
@@ -521,6 +593,7 @@ export class TransferEngine extends EventEmitter<TransferEvents> {
     this.revealer?.destroy()
     this.uploadPacer?.destroy()
     this.uploadScheduler?.destroy()
+    this.downloadGate?.destroy()
     this.pieceSource?.destroy()
     const client = this.client
     if (client) await new Promise<void>((resolve) => client.destroy(() => resolve()))
@@ -666,6 +739,7 @@ export class TransferEngine extends EventEmitter<TransferEvents> {
     this.revealer?.destroy()
     this.uploadPacer?.destroy()
     this.uploadScheduler?.destroy()
+    this.downloadGate?.destroy()
     for (const s of this.unattachedStreams.splice(0)) s.destroy()
     for (const id of [...this.attached.keys()]) this.detach(id)
   }
@@ -817,6 +891,7 @@ export class TransferEngine extends EventEmitter<TransferEvents> {
           }
         : {}),
       diskLow: this.diskLow,
+      ...(this.role === 'viewer' ? { hashFails: this.hashFailures() } : {}),
       peers,
     }
   }

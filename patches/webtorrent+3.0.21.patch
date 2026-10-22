@@ -12,10 +12,19 @@ index 8d3d156..9cd3f4b 100644
      } else {
        queueMicrotask(() => {
 diff --git a/node_modules/webtorrent/lib/torrent.js b/node_modules/webtorrent/lib/torrent.js
-index 771a87f..2694f12 100644
+index 771a87f..f4a9f34 100644
 --- a/node_modules/webtorrent/lib/torrent.js
 +++ b/node_modules/webtorrent/lib/torrent.js
-@@ -1660,8 +1660,7 @@ export default class Torrent extends EventEmitter {
+@@ -175,6 +175,8 @@ export default class Torrent extends EventEmitter {
+     this._amInterested = false
+     this._selections = new Selections()
+     this._critical = []
++    // watch-together: the viewer's download limit (src/core/transfer/download-gate.ts); null = none
++    this._requestGate = null
+     /**
+      * open wires (added *after* handshake)
+      * @type {import('bittorrent-protocol').default[]}
+@@ -1660,8 +1662,7 @@ export default class Torrent extends EventEmitter {
      function validateWire () {
        if (wire.requests.length) return
  
@@ -25,12 +34,53 @@ index 771a87f..2694f12 100644
          const next = self._selections.get(i)
          let piece
          if (self.strategy === 'rarest') {
-@@ -1680,7 +1679,7 @@ export default class Torrent extends EventEmitter {
+@@ -1680,8 +1681,10 @@ export default class Torrent extends EventEmitter {
              tries += 1
            }
          } else {
 -          for (piece = next.to; piece >= next.from + next.offset; --piece) {
 +          for (piece = next.from + next.offset; piece <= next.to; ++piece) {
              if (!wire.peerPieces.get(piece)) continue
++            // watch-together: the walk is in priority order, so nothing after a refused piece may go either
++            if (self._requestGate && !self._requestGate.allows(!!self._critical[piece])) return
              if (self._request(wire, piece, false)) return
            }
+         }
+@@ -1767,6 +1770,8 @@ export default class Torrent extends EventEmitter {
+         } else {
+           for (piece = next.from + next.offset; piece <= next.to; piece++) {
+             if (!wire.peerPieces.get(piece) || !rank(piece)) continue
++            // watch-together: as in validateWire; true, so trySelectWire(true) does not walk it all again
++            if (self._requestGate && !self._requestGate.allows(!!self._critical[piece])) return true
+ 
+             while (self._request(wire, piece, self._critical[piece] || hotswap) &&
+               wire.requests.length < maxOutstandingRequests) {
+@@ -1935,6 +1940,9 @@ export default class Torrent extends EventEmitter {
+       : getBlockPipelineLength(wire, PIPELINE_MAX_DURATION)
+ 
+     if (numRequests >= maxOutstandingRequests) return false
++    // watch-together: the viewer's download limit
++    const gate = self._requestGate
++    if (gate && !gate.allows(!!self._critical[index])) return false
+     // var endGame = (wire.requests.length === 0 && self.store.numMissing < 30)
+ 
+     const piece = self.pieces[index]
+@@ -1953,6 +1961,7 @@ export default class Torrent extends EventEmitter {
+ 
+     const chunkOffset = piece.chunkOffset(reservation)
+     const chunkLength = isWebSeed ? piece.chunkLengthRemaining(reservation) : piece.chunkLength(reservation)
++    if (gate) gate.take(chunkLength)
+ 
+     wire.request(index, chunkOffset, chunkLength, async function onChunk (err, chunk) {
+       if (self.destroyed) return
+@@ -1962,6 +1971,10 @@ export default class Torrent extends EventEmitter {
+ 
+       if (r[i] === wire) r[i] = null
+ 
++      // watch-together: before the check below, so a failed block of a piece replaced meanwhile (verified through
++      // another wire, or reset by a failed hash check) is refunded too; once, as this runs once per request
++      if (err && gate) gate.refund(chunkLength)
++
+       if (piece !== self.pieces[index]) return onUpdateTick()
+ 
+       if (err) {

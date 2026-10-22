@@ -1,3 +1,4 @@
+import { LIMIT_MAX_KBPS } from '../../../shared/limits'
 import { type Settings, type SettingsPatch, mergeSettings } from '../../../shared/settings'
 import { normalizeRelayKey } from './relay-key'
 
@@ -18,8 +19,12 @@ export interface SettingsForm {
   udpPort: string
   bootstrapExtra: string
   uploadLimitKBps: string
+  downloadLimitKBps: string
   hashWorkers: string
   speedNudge: boolean
+  /** desyncWarnMs > 0, and that many seconds as typed */
+  desyncWarn: boolean
+  desyncWarnS: string
   oscPersistentStrip: boolean
   hostOthersControl: boolean
   hostWaitForAll: boolean
@@ -47,8 +52,11 @@ export function formFromSettings(s: Settings): SettingsForm {
     udpPort: s.udpPort === null ? '' : String(s.udpPort),
     bootstrapExtra: s.bootstrapExtra.join('\n'),
     uploadLimitKBps: s.uploadLimitKBps === null ? '' : String(s.uploadLimitKBps),
+    downloadLimitKBps: s.downloadLimitKBps === null ? '' : String(s.downloadLimitKBps),
     hashWorkers: String(s.hashWorkers),
     speedNudge: s.speedNudge,
+    desyncWarn: s.desyncWarnMs > 0,
+    desyncWarnS: s.desyncWarnMs > 0 ? String(s.desyncWarnMs / 1000) : '1',
     oscPersistentStrip: s.oscPersistentStrip,
     hostOthersControl: hd.othersControl,
     hostWaitForAll: hd.waitForAll,
@@ -69,8 +77,23 @@ function int(text: string, min: number, max: number, label: string): Parsed<numb
   return { ok: true, value: n }
 }
 
+/** Seconds with an optional fraction ("1.5", also ".5" as a number field may hold it), as whole milliseconds. */
+function seconds(text: string, min: number, max: number, label: string): Parsed<number> {
+  const t = text.trim()
+  const n = Number(t)
+  if (!/^(\d+(\.\d+)?|\.\d+)$/.test(t) || n < min || n > max) {
+    return { ok: false, message: `${label} must be between ${min} and ${max}.` }
+  }
+  return { ok: true, value: Math.round(n * 1000) }
+}
+
 function optionalInt(text: string, min: number, max: number, label: string): Parsed<number | null> {
   return text.trim() === '' ? { ok: true, value: null } : int(text, min, max, label)
+}
+
+/** A transfer limit in KB/s, empty for none: the one check for Settings and the Room's LimitField. */
+export function limitKBps(text: string, label: string): Parsed<number | null> {
+  return optionalInt(text, 1, LIMIT_MAX_KBPS, label)
 }
 
 function langList(text: string): Parsed<string[]> {
@@ -130,13 +153,18 @@ export function validateSettingsForm(
     alwaysRelay: form.alwaysRelay,
     udpPort: take('udpPort', optionalInt(form.udpPort, 1024, 65535, 'UDP port'), current.udpPort),
     bootstrapExtra: take('bootstrapExtra', bootstrapList(form.bootstrapExtra), current.bootstrapExtra),
-    uploadLimitKBps: take(
-      'uploadLimitKBps',
-      optionalInt(form.uploadLimitKBps, 1, 10_000_000, 'Upload limit'),
-      current.uploadLimitKBps,
+    uploadLimitKBps: take('uploadLimitKBps', limitKBps(form.uploadLimitKBps, 'Upload limit'), current.uploadLimitKBps),
+    downloadLimitKBps: take(
+      'downloadLimitKBps',
+      limitKBps(form.downloadLimitKBps, 'Download limit'),
+      current.downloadLimitKBps,
     ),
     hashWorkers: take('hashWorkers', int(form.hashWorkers, 1, 4, 'Hash workers'), current.hashWorkers),
     speedNudge: form.speedNudge,
+    // off saves 0 whatever the seconds field holds
+    desyncWarnMs: form.desyncWarn
+      ? take('desyncWarnS', seconds(form.desyncWarnS, 0.5, 30, 'Seconds'), current.desyncWarnMs || 1000)
+      : 0,
     oscPersistentStrip: form.oscPersistentStrip,
     hostDefaults: {
       othersControl: form.hostOthersControl,

@@ -17,6 +17,8 @@ export class FakePlayer extends EventEmitter<PlayerLikeEvents> implements Player
   readonly oscLog: { kind: OscKind; payload: unknown }[] = []
   private path: string | null = null
   private paused = true
+  /** stall(true): stopped as mpv stops for data it does not have (paused-for-cache) */
+  private stalled = false
   private speed = 1
   private posAtS = 0
   private atMs = performance.now()
@@ -61,6 +63,7 @@ export class FakePlayer extends EventEmitter<PlayerLikeEvents> implements Player
   load(url: string, opts: LoadOptions = {}): Promise<void> {
     this.path = url
     this.paused = opts.paused ?? true
+    this.stalled = false
     this.jumpTo(opts.start ?? 0)
     this.setStatus('loading')
     return new Promise((resolve) => {
@@ -75,12 +78,27 @@ export class FakePlayer extends EventEmitter<PlayerLikeEvents> implements Player
 
   seek(pos: number): Promise<void> {
     this.jumpTo(pos)
+    // a stall ends with a seek: the data is anywhere but where it stopped
+    const unstall = this.stalled
+    this.stalled = false
     return new Promise((resolve) => {
       setTimeout(() => {
+        if (unstall) this.emit('property', 'paused-for-cache', false)
         this.emit('playbackRestart', { pos: this.pos() })
         resolve()
       }, SEEK_LATENCY_MS)
     })
+  }
+
+  /**
+   * Test hook (production never calls it): playback stops where it is, as mpv's does for data it does not have
+   * (paused-for-cache), until stall(false) or a seek.
+   */
+  stall(on: boolean): void {
+    if (on === this.stalled) return
+    this.jumpTo(this.pos())
+    this.stalled = on
+    this.emit('property', 'paused-for-cache', on)
   }
 
   setPaused(paused: boolean): Promise<void> {
@@ -124,6 +142,7 @@ export class FakePlayer extends EventEmitter<PlayerLikeEvents> implements Player
       case 'eof-reached':
         return this.pos() >= this.durationS
       case 'paused-for-cache':
+        return this.stalled
       case 'seeking':
       case 'core-idle':
         return false
@@ -160,7 +179,7 @@ export class FakePlayer extends EventEmitter<PlayerLikeEvents> implements Player
   }
 
   private pos(): number {
-    if (this.paused) return this.posAtS
+    if (this.paused || this.stalled) return this.posAtS
     const p = this.posAtS + ((performance.now() - this.atMs) / 1000) * this.speed
     return Math.min(p, this.durationS)
   }

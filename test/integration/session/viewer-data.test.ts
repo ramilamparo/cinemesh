@@ -15,9 +15,11 @@ import {
 import { tmpdir } from 'node:os'
 import { join } from 'node:path'
 import createTestnet, { type Testnet } from 'hyperdht/testnet.js'
-import { afterAll, afterEach, beforeAll, describe, expect, it } from 'vitest'
+import { afterAll, afterEach, beforeAll, describe, expect, it, vi } from 'vitest'
 import type { CoreEventName, CoreEvents } from '../../../src/shared/ipc/core.js'
+import { Blobs, blobHash } from '../../../src/core/net/blobs.js'
 import type { ViewerSession } from '../../../src/core/session/viewer-session.js'
+import { MANIFEST_FILE } from '../../../src/core/transfer/engine.js'
 import { prepareHost } from '../../../src/core/transfer/host-prepare.js'
 import { pieceLengthFor } from '../../../src/core/transfer/torrent-builder.js'
 import { HAVE_FFMPEG, fixture } from '../media/fixtures.js'
@@ -307,6 +309,61 @@ describe.skipIf(!HAVE_FFMPEG)('viewer data on disk', () => {
     expect(readFileSync(path).equals(readFileSync(video))).toBe(true)
     // exported: nothing left to resume
     expect(await viewer.client.request('session.recent', {})).toEqual([])
+    await host.client.request('session.leave', { data: 'keep', end: true })
+  })
+
+  it('keeps the manifest in the transfer folder: a resume reads it back instead of fetching it, unless it no longer matches', async () => {
+    const video = await fixture('mkv-cues.mkv')
+    const { infoHash } = await prepareHost({
+      videoPath: video,
+      subtitlePaths: [],
+      cacheRoot: join(root, 'prepare-cache'),
+      workers: 1,
+    })
+    const fetch = vi.spyOn(Blobs.prototype, 'fetch')
+    cleanups.push(() => fetch.mockRestore())
+    const fetched = (): string[] => fetch.mock.calls.map(([hash]) => hash)
+    const host = add('Host')
+    const viewer = add('Sam')
+    const { invite } = await host.client.request('session.host', { videoPath: video, subtitlePaths: [] })
+    await host.client.until('session', (s) => s.phase === 'in-room')
+    await viewer.client.request('session.join', { invite })
+    const confirm = await viewer.client.until('session', (s) => s.phase === 'confirm-join')
+    const roomId = confirm.roomId ?? ''
+    const saveDir = join(viewer.dir, 'save')
+    await viewer.client.request('session.confirmJoin', { dir: saveDir })
+    await viewer.client.until('session', (s) => s.phase === 'in-room')
+
+    // the join fetched both blobs, and kept the manifest beside meta.torrent
+    const transferDir = join(saveDir, '.wt-partial', infoHash)
+    const kept = readFileSync(join(transferDir, MANIFEST_FILE))
+    const manifestHash = blobHash(kept)
+    expect(fetched()).toHaveLength(2)
+    expect(fetched()).toContain(manifestHash)
+    await viewer.client.request('session.leave', { data: 'keep' })
+
+    // Recent rooms → Resume: the torrent comes by blob.get, the manifest from the folder
+    fetch.mockClear()
+    let from = viewer.client.events.length
+    await viewer.client.request('session.resume', { roomId })
+    await next(viewer.client, 'session', from, (s) => s.phase === 'in-room')
+    expect(fetched()).toHaveLength(1)
+    expect(fetched()).not.toContain(manifestHash)
+    await viewer.client.request('session.leave', { data: 'keep' })
+
+    // a copy that no longer matches (torn, or another video's) is fetched again, and replaced
+    writeFileSync(join(transferDir, MANIFEST_FILE), kept.subarray(0, kept.byteLength - 1))
+    fetch.mockClear()
+    from = viewer.client.events.length
+    await viewer.client.request('session.resume', { roomId })
+    await next(viewer.client, 'session', from, (s) => s.phase === 'in-room')
+    expect(fetched()).toContain(manifestHash)
+    expect(readFileSync(join(transferDir, MANIFEST_FILE)).equals(kept)).toBe(true)
+
+    // a save takes the folder with it, the manifest included
+    await next(viewer.client, 'transfer', from, (t) => t.progress === 1)
+    await viewer.client.request('transfer.saveFile', { dest: join(viewer.dir, 'exported') })
+    expect(existsSync(transferDir)).toBe(false)
     await host.client.request('session.leave', { data: 'keep', end: true })
   })
 

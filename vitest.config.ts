@@ -8,7 +8,7 @@ export default defineConfig({
         test: {
           name: 'unit',
           environment: 'node',
-          include: ['src/{shared,core,main}/**/*.test.ts', 'test/core/**/*.test.ts', 'test/sync/**/*.test.ts'],
+          include: ['src/{shared,core,main}/**/*.test.ts', 'test/sync/**/*.test.ts'],
         },
       },
       {

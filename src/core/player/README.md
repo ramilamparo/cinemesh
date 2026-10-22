@@ -84,7 +84,7 @@ Events:
 | ----------------- | ---------------------------------------- | --------------------------------------------------------------- |
 | `state`           | `(next, prev)` `PlayerStatus`            | every lifecycle change                                          |
 | `status`          | `PlayerEvent` `{status, version, hdr}`   | state or HDR change; forward as the renderer's `player` event   |
-| `intent`          | `{kind, pos?, src: 'osc', seq}`          | OSC intents, already resolved: `play pause seek close show-app` |
+| `intent`          | `{kind, pos?, src: 'osc', seq}`          | OSC intents (resolved): `play pause seek close show-app resync` |
 | `fileLoaded`      | `{path}`                                 | mpv `file-loaded` of a file our `loadfile` opened               |
 | `playbackRestart` | `{pos}`                                  | every mpv `playback-restart`                                    |
 | `audioReconfig`   | —                                        | mpv `audio-reconfig` (sync re-fits its clock)                   |
@@ -216,9 +216,12 @@ file another client loaded.
     as `done`: the host's `done` is groupDone already (`core/session/timeline.ts`). `wt-osc.lua` still draws
     the strip under the bar only when it differs from `done` (`same_spans`);
   - `peers [{id, name, color, pos, state}]`: at most 2 Hz, at most 12 peers, names cut to 32 chars;
-  - `status {text, level?}`, `toast {text, ms?}`, `ended {ended}`, `hb {}`.
+  - `status {text, level?}`, `toast {text, ms?}`, `ended {ended}`, `hb {}`;
+  - `resync {shown}`: a viewer behind the host; the bar shows a **Resync to live** button (`strings.resync`) while
+    shown, never for the host, and only from 600 px wide (Shift+R works at any width). Sticky, like `status`.
 - OSC → core: `script-message-to <client_name> wt-ready {v}` / `wt-intent {t, pos?, delta?, seq}`.
-  `t` is one of `play pause toggle seek seek-rel close show-app`.
+  `t` is one of `play pause toggle seek seek-rel close show-app resync`. `resync` comes from Shift+R (`R`; plain `r`
+  is show-app) or the bar button, never on the host; core decides what it does (`BaseSession`, local only).
 - **Colours are converted in TS** (`assColor`: `#RRGGBB` → `&HBBGGRR&`), so the Lua side drops them into
   `\c` tags unchanged and has no hex parsing to get wrong. Already-ASS values pass through.
 - Timeline mapping (piece states → seconds) is not here. `core/timeline.ts` (lead) produces `{done, loading}`

@@ -165,7 +165,8 @@ export interface LoadOptions {
 }
 
 export interface PlayerIntent {
-  kind: 'play' | 'pause' | 'seek' | 'close' | 'show-app'
+  /** resync: the viewer's Shift+R or the bar's button; core decides (BaseSession), as for every other intent */
+  kind: 'play' | 'pause' | 'seek' | 'close' | 'show-app' | 'resync'
   pos?: number
   src: 'osc'
   seq: number
@@ -1188,6 +1189,7 @@ export class PlayerController extends EventEmitter<PlayerControllerEvents> {
       case 'play':
       case 'pause':
       case 'show-app':
+      case 'resync':
         this.emit('intent', { kind: i.t, src: 'osc', seq: i.seq })
         return
     }

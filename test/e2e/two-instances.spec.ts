@@ -8,7 +8,8 @@ import type { WtBridge } from '../../src/shared/ipc/app'
 import { HAVE_FFMPEG, fixture } from '../integration/media/fixtures'
 
 // M8 alpha through the real UI: two app instances on a local DHT testnet (fake players). A hosts a video,
-// B pastes the invite, confirms the folder and lands in the room; A's Play reaches B.
+// B pastes the invite, confirms the folder and lands in the room; B limits its download from the room; A's Play
+// reaches B.
 
 test.skip(!HAVE_FFMPEG, 'needs ffmpeg for the fixture')
 test.setTimeout(120_000)
@@ -28,6 +29,8 @@ async function launch(name: string, bootstrap: string): Promise<Instance> {
   const userData = mkdtempSync(join(tmpdir(), `wt-e2e-${name}-`))
   dirs.push(userData)
   const app = await electron.launch({
+    // GPU on, on X11 (DISPLAY only): the path where a canvas drawn outside an animation frame stalled hidden
+    // windows (Timeline.tsx)
     args: ['out/main/index.js'],
     colorScheme: null,
     env: { ...process.env, WT_USER_DATA: userData, WT_FAKE_PLAYER: '1', WT_BOOTSTRAP: bootstrap },
@@ -42,6 +45,9 @@ async function launch(name: string, bootstrap: string): Promise<Instance> {
   )
   return { name, app, page, userData }
 }
+
+const savedSettings = (i: Instance): Record<string, unknown> =>
+  JSON.parse(readFileSync(join(i.userData, 'settings.json'), 'utf8')) as Record<string, unknown>
 
 /** On failure: what each app shows and the end of its core log, so a CI failure explains itself. */
 async function report(instances: Instance[]): Promise<string> {
@@ -116,6 +122,21 @@ test('host and viewer meet through the UI and play in sync', async () => {
     await expect(b.page.getByText('mkv-cues.mkv').first()).toBeVisible({ timeout: 60_000 })
     await b.page.getByRole('button', { name: 'Join', exact: true }).click()
     await expect(b.page.getByRole('button', { name: 'Copy invite' })).toBeVisible({ timeout: 60_000 })
+
+    // B limits its download from the room: saved through main to Settings, and the transfer line says so until it
+    // is cleared. The host has no download limit.
+    const connection = b.page.getByRole('region', { name: 'Your connection' })
+    const limit = connection.getByLabel('Download limit (KB/s)')
+    const timeline = b.page.getByRole('region', { name: 'Timeline' })
+    await limit.fill('200')
+    await limit.press('Enter')
+    await expect.poll(() => savedSettings(b).downloadLimitKBps).toBe(200)
+    await expect(timeline).toContainText('(limited)')
+    await expect(a.page.getByRole('region', { name: 'Your connection' })).toHaveCount(0)
+    await limit.fill('')
+    await limit.press('Enter')
+    await expect.poll(() => savedSettings(b).downloadLimitKBps).toBeNull()
+    await expect(timeline).not.toContainText('(limited)')
 
     // A presses Play; B's transport flips to Pause
     await a.page

@@ -6,24 +6,27 @@ import type {
   CoreEvents,
   NoticeEvent,
   PlaybackIntent,
+  ResyncOutcome,
   Role,
   RoomEvent,
   SessionEvent,
   Span,
   SyncEvent,
 } from '../../shared/ipc/core.js'
+import { type PeerWarning, formatBehindS } from '../../shared/peer-warnings.js'
 import type { Settings } from '../../shared/settings.js'
 import type { ThemePayload } from '../../shared/theme-tokens.js'
 import type { CoreLog } from '../log.js'
 import type { Room, RoomState } from '../net/room.js'
 import type { RoomStore } from '../net/identity.js'
-import type { OscPeer } from '../player/osc-bridge.js'
+import type { OscPeer, OscStatus } from '../player/osc-bridge.js'
 import { type MpvBinary, PlayerController, type SubtitleSpec } from '../player/player-controller.js'
 import { type PeerSync, SyncEngine, type SyncEngineOptions } from '../sync/engine.js'
 import type { MediaPort, TransferPort } from '../sync/ports.js'
 import type { PeerTransferStats } from '../transfer/engine.js'
 import { FakePlayer } from './fake-player.js'
 import { mergePeerViews } from './peer-view.js'
+import { PeerWarningToasts } from './peer-warning-toasts.js'
 import { PlayerHolder } from './player-holder.js'
 import type { SessionFile } from './session-file.js'
 import {
@@ -87,6 +90,8 @@ export abstract class BaseSession {
   }
   private lastSync: SyncEvent | null = null
   private oscPeersKey = ''
+  /** host: OSC toasts for warnings that just appeared on viewers' rows */
+  private readonly peerToasts = new PeerWarningToasts()
 
   protected constructor(
     protected readonly deps: SessionDeps,
@@ -173,6 +178,7 @@ export abstract class BaseSession {
     holder.on('tracks', (t) => this.deps.emit('tracks', t))
     holder.on('intent', (i) => {
       if (i.kind === 'show-app') this.deps.control.showApp()
+      else if (i.kind === 'resync' && this.role === 'viewer') this.resyncFromOsc()
     })
     holder.on('state', (next) => {
       if (next === 'closedByUser')
@@ -275,6 +281,7 @@ export abstract class BaseSession {
       selfName: this.deps.settings().displayName,
       hostId: s.hostKey,
       nudge: this.deps.settings().speedNudge,
+      desyncWarnMs: this.deps.settings().desyncWarnMs,
       ports: {
         clock: this.clock,
         player: new PlayerPortAdapter(player, { subtitles: opts.subtitles, title: this.sessionEvent.fileName, log }),
@@ -311,9 +318,18 @@ export abstract class BaseSession {
 
   protected abstract transferPeers(): readonly PeerTransferStats[]
 
+  /** Peer list entries the session adds to members' sync warnings, by member id. */
+  protected peerWarnings(): ReadonlyMap<string, readonly PeerWarning[]> {
+    return new Map()
+  }
+
   protected emitPeers(): void {
-    const views = mergePeerViews(this.room.members(), this.latestSyncPeers, this.transferPeers())
+    const views = mergePeerViews(this.room.members(), this.latestSyncPeers, this.transferPeers(), this.peerWarnings())
     this.deps.emit('peers', views)
+    if (this.role === 'host') {
+      const toast = this.peerToasts.next(views, performance.now())
+      if (toast !== null) this.player?.osc('toast', { text: toast })
+    }
     const colors = this.deps.theme().peers
     const osc: OscPeer[] = views
       .filter((v) => !v.self && typeof v.posS === 'number')
@@ -346,8 +362,29 @@ export abstract class BaseSession {
       canSeek: e?.canSeek ?? this.role === 'host',
     })
     player.osc('ended', { ended: e?.mode === 'ended' })
-    const waiting = e?.wait ? `Waiting for ${e.wait.waitingFor.join(', ') || 'everyone'}…` : ''
-    player.osc('status', { text: waiting, level: 'info' })
+    player.osc('status', this.oscStatus(e))
+    // the bar's Resync to live button, with the warning (a viewer's only: the host never gets one)
+    player.osc('resync', { shown: this.role === 'viewer' && e?.desync?.state === 'behind' })
+  }
+
+  /** The OSC's status line: the room's wait first (a waiting room never warns), then this viewer's desync. */
+  private oscStatus(e: SyncEvent | null): OscStatus {
+    if (e?.wait) return { text: `Waiting for ${e.wait.waitingFor.join(', ') || 'everyone'}…`, level: 'info' }
+    const d = this.role === 'viewer' ? e?.desync : undefined
+    if (d?.state === 'catching-up') return { text: 'Resyncing with the host…', level: 'info' }
+    if (d?.state !== 'behind') return { text: '', level: 'info' }
+    return { text: `${formatBehindS(d.behindS)} behind the host · Shift+R to resync`, level: 'warn' }
+  }
+
+  /** Shift+R or the bar's button. What the status line already shows (the catch-up) needs no toast. */
+  private resyncFromOsc(): void {
+    const toasts: Partial<Record<ResyncOutcome, string>> = {
+      'in-sync': 'Already in sync',
+      'not-playing': "The room isn't playing",
+      'not-ready': 'Playback is not ready yet',
+    }
+    const text = toasts[this.resync()]
+    if (text !== undefined) this.player?.osc('toast', { text })
   }
 
   // ---- requests -------------------------------------------------------------------------------
@@ -357,6 +394,11 @@ export abstract class BaseSession {
   ): Promise<{ accepted: boolean; reason?: NonNullable<Awaited<ReturnType<SyncEngine['intent']>>['reason']> }> {
     if (!this.sync) return { accepted: false, reason: 'not-ready' }
     return this.sync.intent(i)
+  }
+
+  /** playback.resync (viewers; the manager refuses it for the host). */
+  resync(): ResyncOutcome {
+    return this.sync ? this.sync.resync() : 'not-ready'
   }
 
   syncEngine(): SyncEngine | null {
@@ -375,11 +417,16 @@ export abstract class BaseSession {
       alwaysRelay: s.alwaysRelay,
     })
     this.sync?.setNudge(s.speedNudge)
+    this.sync?.setDesyncWarn(s.desyncWarnMs)
     this.applyUploadLimit(s.uploadLimitKBps)
+    this.applyDownloadLimit(s.downloadLimitKBps)
   }
 
   /** Live upload-limit changes (Settings or the host panel). */
   protected abstract applyUploadLimit(kbps: number | null): void
+
+  /** Live download-limit changes (Settings or the viewer's Room). Viewers only: a host downloads nothing. */
+  protected applyDownloadLimit(_kbps: number | null): void {}
 
   updateTheme(t: ThemePayload): void {
     this.player?.osc('theme', t)

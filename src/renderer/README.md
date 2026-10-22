@@ -20,7 +20,7 @@ src/renderer/src/
   App.tsx             shell: TitleBar, current screen, Toasts, Settings / Leave / JoinDialog overlays
   lib/                pure helpers: format, playhead, coverage, relay-key, keyboard, settings-form, theme, mpv-check
   components/         TitleBar, Toasts, JoinDialog, LeavePrompt (+ StopHostingPrompt), KeepAwakeNote, Feasibility,
-                      FullDownload, MediaNotes, ui (Switch, Field, Segmented, Modal, ProgressBar),
+                      FullDownload, MediaNotes, LimitField, ui (Switch, Field, Segmented, Modal, ProgressBar),
                       Timeline/{Timeline.tsx, draw.ts}
   screens/            Home, HostPrepare, JoinConfirm, Room/*, Settings (overlay), MpvSetup, ErrorScreen
   mock/               FakeCore (scriptable window.wt), fixtures, scenarios, simulate (live mode)
@@ -110,6 +110,10 @@ and radios). The focused timeline slider handles ←/→ itself; Space still tog
   `joining` (it has no source to load yet), so the viewer's own peer row says "Downloading N %" (the same
   `transfer.progress`) instead of "Joining". Other rows keep sync's word: a remote `joining` member may still be
   connecting.
+- **Peer warnings** (`PeerView.warnings`): entries with a code and their numbers, not text. `PeerList` shows each
+  as a line from `peerWarningText` (`src/shared/peer-warnings.ts`, which core's OSC toasts use too), keyed by code,
+  with `data-tone` from `peerWarningTone`: hash failures in the danger colour, the rest in the normal text colour.
+  `formatMbit` lives there as well; `lib/format.ts` re-exports it.
 - **Media notes** (`components/MediaNotes.tsx`, `session.media`; not for a full-download file, which plays from disk):
   `seekMode: 'linear'` (no seek index: to play from a point, a viewer needs everything from the start up to it) shows
   "Seeking is slower for viewers." in HostPrepare and the host's Room; `interleave: 'poor'` shows "Viewers need more
@@ -130,7 +134,18 @@ and radios). The focused timeline slider handles ←/→ itself; Space still tog
   Shown only while the phase is `in-room`: once the room is closed (or being left) sync stops, and its last event
   would keep a stale wait on the Closed card.
 - **Feasibility line**: core sends `prepare.feasibility` while preparing and about once a second on the host in
-  the room, so it shows in HostPrepare and in the host panel's Network group (`components/Feasibility.tsx`).
+  the room, so it shows in HostPrepare and in the host panel's Network group (`components/Feasibility.tsx`). When
+  the host's own upload limit is what the upload comes to (at most 5 % above the measured upload, or nothing
+  measured yet), the line names it ("your upload limit ~0.8 Mbit/s") and the advice is to raise or clear it.
+- **Transfer limits** (settings `uploadLimitKBps`, `downloadLimitKBps`; KiB/s, empty for none): Settings › Network
+  has both. In the Room, `components/LimitField.tsx` edits one of them live through `app.setSettings` (blur or
+  Enter; a bad value says why and saves nothing; it takes what Settings takes, `limitKBps` in
+  `lib/settings-form.ts`, so a value saved there never fails a later Settings save): the host panel has the upload
+  limit only, and a viewer's **Your connection** card (`Room/ConnectionPanel.tsx`) has both, with a line comparing
+  the download limit to the video's average bitrate (`fileSize / durationS`; a warning below 1.1 × it,
+  `SLOW_RATE_FACTOR` from `src/shared/limits.ts`, the factor core's slow-download warning uses: "Below" the bitrate
+  itself, "Close to" it from there to 1.1 ×). The viewer's transfer line adds
+  "(limited)" while a download limit is set: the limit is KiB-based and the rate decimal, so no number.
 - **Host still preparing**: a viewer in `connecting` / `pending-admission` gets prepare events forwarded from the
   host and sees "The host is preparing the video: N %". The store drops `prepare` when the session goes back to
   `idle` or `error`, so a later join never shows a stale line.
@@ -194,6 +209,12 @@ core.ts
   limit or the paced rate, whichever is lower), the pacer's queueing-delay estimate and its state ('start' |
   'steady'). Nothing shows it yet.
 - `PeerView.posS?: number | null`: each member's last reported position, for the timeline peer markers.
+- `PeerView.warnings: PeerWarning[]` (was `string[]`): `{code, …numbers}` from `src/shared/peer-warnings.ts`.
+- `SyncEvent.desync?: {state: 'behind', behindS} | {state: 'catching-up'}` (viewer): this viewer is behind the host
+  (Settings `desyncWarnMs`). The Room shows `DesyncBanner` while the room plays: "You're 3 s behind the host" with
+  **Resync to live**, or "Resyncing with the host…". Its live region holds only the state ("You're behind the
+  host"), not the number, which changes up to twice a second while a stall grows. Request `playback.resync: {} → {outcome: ResyncOutcome}`,
+  viewer only and local (no permission); `rpc.resync()` toasts the outcomes that changed nothing.
 - (Lead, round 3) `SessionPhase` `'leaving'` and `SessionEvent.media?: {container, seekMode, fullDownload}`.
 - (Lead, round 4) `SessionEvent.leave?: 'keep' | 'save' | 'delete' | 'end'` (only with phase `leaving`),
   `SessionEvent.media.interleave?: 'good' | 'poor' | 'unknown'`, `NoticeEvent.path?: string`.
@@ -265,7 +286,7 @@ dev build, in a plain browser on the Vite dev server (`npm run dev`, then open t
 Query parameters:
 
 - `?mock=<scenario>`, one of: `home`, `preparing`, `connecting`, `pending`, `connecting-host-preparing`,
-  `confirm-join`, `confirm-join-low-space`, `room-host`, `room-viewer`, `room-viewer-waiting`, `ended-host`,
+  `confirm-join`, `confirm-join-low-space`, `room-host`, `room-viewer`, `room-viewer-waiting`, `room-viewer-behind` (the desync banner), `ended-host`,
   `ended-viewer` (video ended, room open), `room-closed` (the host ended the room), `room-closed-complete` (… and
   the viewer has the whole video: Save file shows the saving banner for 3 s, then Home with the saved path),
   `leaving` (core reports phase `leaving`, without saying what runs), `leaving-save` (… a `save`, as after a reload

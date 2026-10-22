@@ -13,8 +13,9 @@
 --   ranges {dur, done, loading, groupDone?}   merged spans in seconds
 --   peers [{id, name, color, pos, state}]
 --   status {text, level?}   toast {text, ms?}   ended {ended}   hb {}
+--   resync {shown}   a viewer behind the host: the bar shows a Resync to live button
 -- OSC -> core (script-message-to <client> ...):
---   wt-ready {v}   wt-intent {t, pos?, delta?, seq}
+--   wt-ready {v}   wt-intent {t, pos?, delta?, seq}   t = resync: Shift+R or that button (never on the host)
 
 local mp = require 'mp'
 local utils = require 'mp.utils'
@@ -48,6 +49,7 @@ local S = {
     subsShown = 'Subtitles shown',
     noTracks = 'No tracks',
     locked = 'The host controls this',
+    resync = 'Resync to live',
   },
   colors = {
     surface = '&H231D1B&',
@@ -69,6 +71,7 @@ local S = {
   status = { text = '', level = 'info' },
   toast = nil, -- {text, till}
   ended = false,
+  resync_shown = false,
 
   -- mpv state
   w = 0,
@@ -196,6 +199,8 @@ local function compute_layout()
   L.volume = right_button(64 * s)
   L.sub = right_button(44 * s)
   L.audio = right_button(44 * s)
+  -- only where it leaves the time text its room
+  if S.resync_shown and not S.perms.isHost and w >= 600 * s then L.resync = right_button(112 * s) end
   return L
 end
 
@@ -219,6 +224,7 @@ local function hit(x, y)
   if inside(L.sub, x, y) then return 'sub' end
   if inside(L.volume, x, y) then return 'volume' end
   if inside(L.fullscreen, x, y) then return 'fullscreen' end
+  if inside(L.resync, x, y) then return 'resync' end
   return 'bar'
 end
 
@@ -405,6 +411,7 @@ local function draw_bar(ass, L)
   draw_button(ass, L.sub, S.sub_visible and 'Subs' or 'Subs off', over == 'sub', s)
   draw_volume(ass, L.volume, over == 'volume', s)
   draw_fullscreen(ass, L.fullscreen, over == 'fullscreen', s)
+  if L.resync then draw_button(ass, L.resync, S.strings.resync, over == 'resync', s) end
 end
 
 local function draw_strip(ass)
@@ -542,6 +549,8 @@ local function on_mouse_button(e)
         toggle_mute()
       elseif what == 'fullscreen' then
         mp.commandv('cycle', 'fullscreen')
+      elseif what == 'resync' then
+        intent('resync')
       end
     end
     S.pressed = nil
@@ -586,6 +595,13 @@ bind('x', 'sub-delay-up', function()
 end, { repeatable = true })
 bind('I', 'stats', function() mp.commandv('script-binding', 'stats/display-stats-toggle') end)
 bind('r', 'show-app', function() intent('show-app') end)
+-- Shift+R (mpv's own R moves subtitles); core answers in the status line or a toast
+bind('R', 'resync', function()
+  if not S.perms.isHost then
+    poke()
+    intent('resync')
+  end
+end)
 bind('CLOSE_WIN', 'close', function() intent('close') end)
 bind('MBTN_LEFT', 'mouse', on_mouse_button, { complex = true })
 
@@ -741,6 +757,12 @@ end)
 mp.register_script_message('ended', function(json)
   local e = parse(json)
   S.ended = type(e) == 'table' and e.ended == true
+  request_render()
+end)
+
+mp.register_script_message('resync', function(json)
+  local m = parse(json)
+  S.resync_shown = type(m) == 'table' and m.shown == true
   request_render()
 end)
 

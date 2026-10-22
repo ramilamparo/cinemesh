@@ -9,6 +9,7 @@ describe('feasibilityLine', () => {
     expect(feasibilityLine({ needBps: 2_900_000, uploadBps: 2_100_000 })).toEqual({
       text: 'Group needs ~23 Mbit/s from you; your upload ~17 Mbit/s',
       short: true,
+      byLimit: false,
     })
     expect(feasibilityLine({ needBps: 500_000, uploadBps: 4_400_000 })?.short).toBe(false)
   })
@@ -17,8 +18,31 @@ describe('feasibilityLine', () => {
     expect(feasibilityLine({ needBps: 500_000, uploadBps: null })).toEqual({
       text: 'Group needs ~4.0 Mbit/s from you; your upload unknown',
       short: false,
+      byLimit: false,
     })
     expect(feasibilityLine(undefined)).toBeNull()
+  })
+
+  it("names the host's upload limit when that is what the upload comes to", () => {
+    const limit = 100 * 1024 // 100 KB/s in Settings: ~0.8 Mbit/s
+    expect(feasibilityLine({ needBps: 2_900_000, uploadBps: 102_400 }, limit)).toEqual({
+      text: 'Group needs ~23 Mbit/s from you; your upload limit ~0.8 Mbit/s',
+      short: true,
+      byLimit: true,
+    })
+    // nothing measured yet: the limit is the most it can be
+    expect(feasibilityLine({ needBps: 500_000, uploadBps: null }, limit)).toMatchObject({ short: true, byLimit: true })
+    // the link is slower than the limit: the measured upload is the one to show
+    expect(feasibilityLine({ needBps: 2_900_000, uploadBps: 50_000 }, limit)).toEqual({
+      text: 'Group needs ~23 Mbit/s from you; your upload ~0.4 Mbit/s',
+      short: true,
+      byLimit: false,
+    })
+    // a limit far above the need is not short
+    expect(feasibilityLine({ needBps: 500_000, uploadBps: 4_400_000 }, 4_400_000)).toMatchObject({
+      short: false,
+      byLimit: true,
+    })
   })
 })
 

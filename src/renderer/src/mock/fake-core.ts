@@ -403,6 +403,19 @@ export class FakeCore {
       return null
     })
     this.handle('sync.request', () => null)
+    this.handle('playback.resync', () => {
+      const s = this.state.sync
+      if (s?.mode !== 'playing') return { outcome: 'not-playing' }
+      if (!s.desync) return { outcome: 'in-sync' }
+      // like core: catching up, then in sync
+      this.emit('sync', { ...s, desync: { state: 'catching-up' } })
+      this.later(800, () => {
+        const rest = { ...(this.state.sync ?? s) }
+        delete rest.desync
+        this.emit('sync', rest)
+      })
+      return { outcome: 'skip' }
+    })
     this.handle('playback.intent', (intent) => {
       const s = this.state.sync
       const pb = this.state.playback

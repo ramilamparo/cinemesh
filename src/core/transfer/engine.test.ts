@@ -222,3 +222,171 @@ describe('TransferEngine upload limit', () => {
     }
   })
 })
+
+describe('TransferEngine download limit', () => {
+  const PL = 32 * 1024 // two blocks a piece
+  const info = { name: 'x.mkv', 'piece length': PL, length: 4 * PL, pieces: Buffer.alloc(80, 1), private: 1 }
+  const torrent = Buffer.from(bencode.encode({ info }))
+  interface Gate {
+    allows(critical: boolean): boolean
+    take(bytes: number): void
+    refund(bytes: number): void
+    rateBps?: number | null
+  }
+  interface Sent {
+    index: number
+    offset: number
+    cb: (err: Error | null, buf?: Uint8Array) => void
+  }
+  interface ViewerTorrent {
+    _requestGate: Gate | null
+    _critical: boolean[]
+    pieces: unknown[]
+    _request(wire: unknown, index: number, hotswap: boolean): boolean
+    _updateWire(wire: unknown): void
+  }
+  const torrentOf = (e: TransferEngine): ViewerTorrent => (e as unknown as { torrent: ViewerTorrent }).torrent
+  async function viewer(
+    run: (e: TransferEngine, t: ViewerTorrent) => void | Promise<void>,
+    downloadLimitKBps?: number | null,
+  ): Promise<void> {
+    const dir = mkdtempSync(join(tmpdir(), 'wt-engine-gate-'))
+    const e = new TransferEngine()
+    try {
+      await e.joinAsViewer({
+        torrent,
+        dir,
+        uploadLimitKBps: null,
+        ...(downloadLimitKBps === undefined ? {} : { downloadLimitKBps }),
+      })
+      await run(e, torrentOf(e))
+    } finally {
+      await e.destroy()
+      rmSync(dir, { recursive: true, force: true })
+    }
+  }
+  /** A peer with every piece that unchoked us; `downloadSpeed` sets WebTorrent's pipeline (2 + ⌈1 s of it / 16 KiB⌉). */
+  function peer(downloadSpeed = 0): { wire: Record<string, unknown>; sent: Sent[] } {
+    const sent: Sent[] = []
+    const requests: { piece: number; offset: number; length: number }[] = []
+    const wire = {
+      type: 'tcpOutgoing',
+      requests,
+      downloaded: 0,
+      destroyed: false,
+      peerChoking: false,
+      peerPieces: { get: () => true },
+      peerExtendedHandshake: {},
+      downloadSpeed: () => downloadSpeed,
+      request(index: number, offset: number, length: number, cb: Sent['cb']) {
+        requests.push({ piece: index, offset, length })
+        sent.push({ index, offset, cb })
+      },
+    }
+    return { wire, sent }
+  }
+  /** A gate that says `verdict(critical)` and logs every call. */
+  function spyGate(verdict: (critical: boolean) => boolean): { gate: Gate; calls: string[] } {
+    const calls: string[] = []
+    const gate: Gate = {
+      allows: (critical) => {
+        calls.push(`allows ${String(critical)}`)
+        return verdict(critical)
+      },
+      take: (bytes) => calls.push(`take ${String(bytes)}`),
+      refund: (bytes) => calls.push(`refund ${String(bytes)}`),
+    }
+    return { gate, calls }
+  }
+
+  it('gives the viewer torrent a gate at the limit taken at the join, or set while the start was still running', async () => {
+    await viewer((_e, t) => {
+      expect(t._requestGate?.rateBps).toBe(100 * 1024)
+    }, 100)
+    const dir = mkdtempSync(join(tmpdir(), 'wt-engine-gate-'))
+    const e = new TransferEngine()
+    try {
+      const start = e.joinAsViewer({ torrent, dir, uploadLimitKBps: null })
+      e.setDownloadLimit(500) // the torrent comes several awaits later
+      await start
+      expect(torrentOf(e)._requestGate?.rateBps).toBe(500 * 1024)
+      e.setDownloadLimit(null)
+      expect(torrentOf(e)._requestGate?.rateBps).toBeNull()
+      e.setDownloadLimit(64)
+      expect(torrentOf(e)._requestGate?.rateBps).toBe(64 * 1024)
+      e.setDownloadLimit(0)
+      expect(torrentOf(e)._requestGate?.rateBps).toBeNull()
+    } finally {
+      await e.destroy()
+      rmSync(dir, { recursive: true, force: true })
+    }
+  })
+
+  it('_request asks the gate before it reserves a block, with the piece’s critical flag, and takes what it sends', async () => {
+    await viewer((_e, t) => {
+      const { wire, sent } = peer()
+      let open = false
+      const { gate, calls } = spyGate(() => open)
+      t._requestGate = gate
+      expect(t._request(wire, 0, false)).toBe(false)
+      t._critical[1] = true
+      expect(t._request(wire, 1, false)).toBe(false)
+      expect(sent).toEqual([])
+      expect(calls).toEqual(['allows false', 'allows true'])
+      open = true
+      expect(t._request(wire, 0, false)).toBe(true)
+      expect(sent.map((s) => s.offset)).toEqual([0]) // the refusal reserved nothing
+      expect(calls.slice(2)).toEqual(['allows false', `take ${String(16 * 1024)}`])
+    })
+  })
+
+  it('refunds a failed block once, also when its piece was replaced meanwhile; never an answered one', async () => {
+    await viewer(async (_e, t) => {
+      const { wire, sent } = peer(64 * 1024)
+      const { gate, calls } = spyGate(() => true)
+      t._requestGate = gate
+      const refunds = (): number => calls.filter((c) => c.startsWith('refund')).length
+      t._request(wire, 0, false)
+      t._request(wire, 1, false)
+      t._request(wire, 2, false)
+      sent[0]?.cb(new Error('request was rejected')) // a BEP 6 reject: a host's preempt, a take-back
+      await tick()
+      expect(refunds()).toBe(1)
+      sent[1]?.cb(null, Buffer.alloc(16 * 1024)) // answered: those bytes came
+      await tick()
+      expect(refunds()).toBe(1)
+      t.pieces[2] = null // verified through another wire (or reset by a failed hash check) before this one failed
+      sent[2]?.cb(new Error('wire was closed'))
+      await tick()
+      expect(refunds()).toBe(2)
+      expect(calls.filter((c) => c.startsWith('refund'))).toEqual([
+        `refund ${String(16 * 1024)}`,
+        `refund ${String(16 * 1024)}`,
+      ])
+    })
+  })
+
+  it('the request walks stop at the first piece the gate refuses: critical ones first, then nothing', async () => {
+    await viewer((e, t) => {
+      // order: 2 (the hot window, critical), then 2, 3 (L1), then 0, 1 (L3)
+      e.setPlayhead({ byte: 2 * PL, windowBytes: PL, hotBytes: 1, seek: true })
+      expect([0, 1, 2, 3].map((i) => t._critical[i] === true)).toEqual([false, false, true, false])
+      // a wire that delivered before (trySelectWire), pipeline 6: piece 2 borrows, the walk ends at piece 3
+      const busy = peer(64 * 1024)
+      busy.wire.downloaded = 1
+      const s1 = spyGate((critical) => critical)
+      t._requestGate = s1.gate
+      t._updateWire(busy.wire)
+      expect(busy.sent.map((s) => s.index)).toEqual([2, 2])
+      expect(s1.calls.filter((c) => c === 'allows false')).toEqual(['allows false']) // not every piece, not twice
+      expect(s1.calls.at(-1)).toBe('allows false')
+      // a fresh wire (validateWire): refused at its first piece, it asks nothing more
+      const fresh = peer()
+      const s2 = spyGate(() => false)
+      t._requestGate = s2.gate
+      t._updateWire(fresh.wire)
+      expect(fresh.sent).toEqual([])
+      expect(s2.calls).toEqual(['allows true'])
+    })
+  })
+})

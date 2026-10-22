@@ -1,4 +1,11 @@
-import type { CoreMethod, IntentRejection, ParamsOf, PlaybackIntent, ResultOf } from '../../shared/ipc/core'
+import type {
+  CoreMethod,
+  IntentRejection,
+  ParamsOf,
+  PlaybackIntent,
+  ResultOf,
+  ResyncOutcome,
+} from '../../shared/ipc/core'
 import { CORE_ERRORS } from '../../shared/ipc/core'
 import type { Result } from '../../shared/result'
 import { wt } from './bridge'
@@ -71,4 +78,18 @@ export function askFor(intent: PlaybackIntent): AskHost {
 export async function askHost(ask: AskHost): Promise<void> {
   const r = await call('sync.request', ask)
   if (r.ok) pushToast({ level: 'info', message: 'Asked the host.', code: 'intent' })
+}
+
+/** Outcomes that changed nothing; a catch-up shows in the desync banner itself. */
+const RESYNC_TEXT: Partial<Record<ResyncOutcome, string>> = {
+  'in-sync': "You're already in sync.",
+  'not-playing': "The room isn't playing right now.",
+  'not-ready': 'Playback is not ready yet.',
+}
+
+/** Resync to live: meets the room on this machine only (no permission needed). */
+export async function resync(): Promise<void> {
+  const r = await call('playback.resync', {})
+  const text = r.ok ? RESYNC_TEXT[r.value.outcome] : undefined
+  if (text !== undefined) pushToast({ level: 'info', message: text, code: 'resync' })
 }

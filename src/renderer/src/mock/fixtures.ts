@@ -10,6 +10,7 @@ import type {
   SyncEvent,
   TracksEvent,
 } from '../../../shared/ipc/core'
+import type { PeerWarning } from '../../../shared/peer-warnings'
 import { encodeCoverage } from '../lib/coverage'
 
 // Realistic payloads for the fake core. Times are performance.now() based, like core's monotonic clock.
@@ -167,7 +168,7 @@ function coverageUpTo(fraction: number, holes: number[] = []): string {
 export function peers(selfRole: Role): PeerView[] {
   const base = {
     exempt: false,
-    warnings: [] as string[],
+    warnings: [] as PeerWarning[],
     bufferedAheadS: 24,
   }
   return [
@@ -218,7 +219,7 @@ export function peers(selfRole: Role): PeerView[] {
       havePct: 18,
       coverage: coverageUpTo(0.25, [12, 13, 14, 40]),
       bufferedAheadS: 2,
-      warnings: ['Relayed connection: slower than direct'],
+      warnings: [{ code: 'slow-download', rateBps: 775_000, needBps: 1_187_500, bufferInS: 40, limitBps: null }],
       posS: 590,
     },
     {

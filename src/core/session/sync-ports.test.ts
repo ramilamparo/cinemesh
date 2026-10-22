@@ -17,6 +17,7 @@ import {
   LOOP_RESOLUTION_MS,
   PlayerPortAdapter,
   SYNC_BUS_POLICIES,
+  TransferPortAdapter,
   createClock,
   defineSyncPolicies,
   frameSeconds,
@@ -986,5 +987,21 @@ describe('toggleKind (OSC Space)', () => {
     expect(toggleKind(state(1, { mode: 'ended' }))).toBe('play')
     expect(toggleKind(null)).toBe('play')
     expect(toggleKind(undefined)).toBe('play')
+  })
+})
+
+describe('TransferPortAdapter.downLimitBps', () => {
+  const deps = { rateBps: () => 0, etaToEofS: () => null, coverage: () => null, diskFull: () => false }
+
+  it("reads the viewer's limit each time, so a change reaches the next status without a restart", () => {
+    let limit: number | null = 500 * 1024
+    const port = new TransferPortAdapter({ ...deps, downLimitBps: () => limit })
+    expect(port.downLimitBps()).toBe(500 * 1024)
+    limit = null
+    expect(port.downLimitBps()).toBeNull()
+  })
+
+  it('is null on the host, which has no download limit', () => {
+    expect(new TransferPortAdapter(deps).downLimitBps()).toBeNull()
   })
 })

@@ -60,6 +60,7 @@ describe('parseIntent', () => {
     expect(parseIntent('{"t":"toggle","seq":3}')).toEqual({ t: 'toggle', seq: 3 })
     expect(parseIntent('{"t":"seek","pos":12.5,"seq":4}')).toEqual({ t: 'seek', pos: 12.5, seq: 4 })
     expect(parseIntent('{"t":"seek-rel","delta":-5,"seq":5}')).toEqual({ t: 'seek-rel', delta: -5, seq: 5 })
+    expect(parseIntent('{"t":"resync","seq":6}')).toEqual({ t: 'resync', seq: 6 })
   })
   it('rejects malformed intents', () => {
     expect(parseIntent('{"t":"seek","seq":1}')).toBeNull()
@@ -190,6 +191,18 @@ describe('OscBridge', () => {
     bridge.attach(() => Promise.resolve(), 'ipc_4', 0)
     bridge.detach()
     expect(sent.find(([k]) => k === 'init')?.[1]).toMatchObject({ perms: { canPlayPause: false } })
+  })
+
+  it("keeps the Resync to live button's state for a restarted OSC, and names it in init", () => {
+    const { bridge, sent } = setup()
+    expect(sent.find(([k]) => k === 'init')?.[1]).toMatchObject({ strings: { resync: 'Resync to live' } })
+    bridge.sendMessage('resync', { shown: true })
+    expect(sent.some(([k]) => k === 'resync')).toBe(false)
+    bridge.handleClientMessage(['wt-ready', '{}'])
+    expect(sent.filter(([k]) => k === 'resync').map(([, body]) => body)).toEqual([{ shown: true }])
+    bridge.sendMessage('resync', { shown: false })
+    expect(sent.at(-1)).toEqual(['resync', { shown: false }])
+    bridge.detach()
   })
 
   it('shows the latest toast sent before the OSC was up once it is, once, and only while it is fresh', () => {

@@ -75,7 +75,8 @@ function wrapMessagePortMain(port: MessagePortMainLike): RpcPort {
 }
 
 /**
- * Headless mode (tests, scripts/headless-peer.mjs): JSON lines on stdin/stdout.
+ * Headless mode (`--stdio-transport`, or no Electron parent port; `src/core/index.test.ts` runs core's entry so): JSON
+ * lines on stdin/stdout.
  * {"ch":"control","m":...} carries MainToCore/CoreToMain; {"ch":"rpc","m":...} is one renderer port,
  * opened by sending {"ch":"control","m":{"type":"renderer-port"}}.
  */

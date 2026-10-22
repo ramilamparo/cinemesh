@@ -80,6 +80,8 @@ export class FakeMpv implements PlayerPort {
   private speed = 1
   private seeking = false
   private pausedForCache = false
+  /** stall(true): stalled whatever the media has */
+  private forcedStall = false
   private eof = false
   private running = false
   /** audio ran since the process started: the AO keeps its state from the last pause (stalePausedMs) */
@@ -228,6 +230,21 @@ export class FakeMpv implements PlayerPort {
     this.emit('externalChange', { kind: 'pause' })
   }
 
+  /**
+   * Playback stops where it is as for data mpv does not have (paused-for-cache), whatever the media holds, until
+   * stall(false) (then it resumes as a stall does, once 1 s is buffered) or a seek or load lands.
+   */
+  stall(on: boolean): void {
+    this.forcedStall = on
+    if (!on || !this.loaded) return
+    this.cancelStart()
+    this.freeze()
+    if (this.pausedForCache) return
+    this.pausedForCache = true
+    this.emit('buffering', true)
+    this.emitState()
+  }
+
   userIntent(i: PlaybackIntent): void {
     this.emit('intent', i)
   }
@@ -355,6 +372,7 @@ export class FakeMpv implements PlayerPort {
         this.seeking = false
         this.eof = false
         this.pausedForCache = false
+        this.forcedStall = false
         this.emit('playbackRestart', undefined)
         this.emitState()
         if (!this.paused) this.armStart(this.o.restartLatMs, false)
@@ -423,7 +441,8 @@ export class FakeMpv implements PlayerPort {
       }
       return
     }
-    if (this.pausedForCache && this.media.contiguousEnd(this.base) - this.base >= Math.min(1, dur - this.base - 0.01)) {
+    const enough = this.media.contiguousEnd(this.base) - this.base >= Math.min(1, dur - this.base - 0.01)
+    if (this.pausedForCache && !this.forcedStall && enough) {
       this.pausedForCache = false
       this.emit('buffering', false)
       this.emitState()

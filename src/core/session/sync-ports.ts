@@ -108,6 +108,7 @@ export class PlayerPortAdapter implements PlayerPort {
     private readonly player: PlayerLike,
     private readonly opts: { subtitles: () => SubtitleSpec[]; title: string | null; log: Log },
   ) {
+    // show-app, close and resync are not playback intents: the session handles them (resync is local only)
     player.on('intent', (i) => {
       if (i.kind === 'play' || i.kind === 'pause') this.fire('intent', { kind: i.kind })
       else if (i.kind === 'seek' && typeof i.pos === 'number') this.fire('intent', { kind: 'seek', posS: i.pos })
@@ -471,6 +472,8 @@ export interface TransferPortDeps {
   etaToEofS: () => number | null
   coverage: () => string | null
   diskFull: () => boolean
+  /** viewers: the download limit setting, read each time (live); absent on the host */
+  downLimitBps?: () => number | null
 }
 
 export class TransferPortAdapter implements TransferPort {
@@ -486,6 +489,9 @@ export class TransferPortAdapter implements TransferPort {
   }
   diskFull(): boolean {
     return this.d.diskFull()
+  }
+  downLimitBps(): number | null {
+    return this.d.downLimitBps?.() ?? null
   }
 }
 

@@ -3,7 +3,8 @@
 Plan §4.2. One WebTorrent 3.0.21 client per session. It runs only over `MuxWireStream`s (Protomux channel
 `wtp/bt/1`, `id = infoHash`) on room connections. All its own discovery, and its TCP listener, are off
 (`client-options.ts` together with `patches/webtorrent+3.0.21.patch`, which also makes a fresh wire's first request
-the head of the plan: `validateWire()` walks the selections forwards, ADR 0003 Finding 1).
+the head of the plan: `validateWire()` walks the selections forwards, ADR 0003 Finding 1; it also holds the hooks of
+the viewer's download limit, below).
 
 **What a member can send.** Any room member can open the lane and send any bytes. Two patches harden the wire
 parser; each item below was an uncaught exception in the core (its handler reports it to main as fatal) or a stalled
@@ -44,6 +45,7 @@ Two more patches serve the host's upload scheduler (below), not hardening:
 | `engine.ts`                          | **`TransferEngine` facade**: host seeding, viewer download, attach/detach, stats, journal, disk checks, leave           |
 | `mux-wire-stream.ts`                 | WebTorrent peer over a Protomux channel. Strict backpressure, ≤ 64 KiB messages; destroy releases a held write          |
 | `client-options.ts`                  | `WEBTORRENT_OPTIONS`; `torrentPort: 1` is a placeholder that torrent-discovery requires. No `downloadLimit` (S2)        |
+| `download-gate.ts`                   | Viewer: the download limit, a token bucket over the block requests it sends (ADR 0010)                                  |
 | `torrent-builder.ts`                 | `pieceLengthFor`, multi-file layout `[video, ...subs]`, private info dict, infoHash                                     |
 | `host-prepare.ts` + `hash-worker.ts` | SHA-1 in worker threads. Whole-video hashes are cached per file, with a 3-piece spot check                              |
 | `source-files.ts`                    | The host's files, opened read-only once. Shared by the store and the source watchdog                                    |
@@ -66,7 +68,9 @@ Two more patches serve the host's upload scheduler (below), not hardening:
 ```ts
 const t = new TransferEngine()
 await t.startHost(prepared /* prepareHost() */, { uploadLimitKBps })
-await t.joinAsViewer({ torrent, dir: '<save>/.wt-partial/<infoHash>', uploadLimitKBps }) // → { resumedPieces }
+await t.joinAsViewer({ torrent, manifest, dir, uploadLimitKBps, downloadLimitKBps }) // → { resumedPieces }
+// dir: '<save>/.wt-partial/<infoHash>'; downloadLimitKBps is optional (absent = none)
+// writes meta.torrent and (when given) manifest.bin (MANIFEST_FILE) there: a resume reads the manifest back
 t.attach(roomPeer)
 t.detach(peerId) // on room 'peer' / 'peer-gone'
 t.setPlayhead(plan) // media Playhead → scheduler (viewer)
@@ -75,6 +79,7 @@ t.streamSource // PieceSource for StreamServer.listen (viewer)
 t.pieceStates()
 t.setUploadLimit(kbps) // also before the client exists: a start picks up the latest value. Host: the upload
 // scheduler's limit (with the paced rate, whichever is lower); viewer: WebTorrent's upload throttle
+t.setDownloadLimit(kbps) // viewer, also before the torrent exists: gates the requests it sends; no effect on a host
 await t.leave({ data: 'keep' | 'save' | 'delete', saveDir }) // idempotent; 'delete' works before the torrent is ready
 
 // host-assigned striping: the sessions wire these (session/striping.ts, bus message 'transfer.links')
@@ -82,6 +87,7 @@ host.setGroupCriticalRanges(ranges) // open-critical + subtitle files: revealed 
 host.setGroupPlayhead(plan) // the room's playhead: the same PlayheadPlan viewers pass to setPlayhead
 viewer.linkedPeers() // members it has an open, handshaken bt wire to: reported at 1 Hz, and with the reports below
 viewer.blockedPieces() // pieces an HTTP reader is blocked on, ascending: reported with the links
+viewer.hashFailures() // { total, worst: [piece, failures][] ≤ 8 }: downloaded pieces that failed their hash check
 viewer.on('blocked-changed', (pieces) => report()) // report at once, not at the next 1 Hz
 host.setViewerLinks(memberId, linked) // a lane counts once both ends report it
 host.setViewerUrgent(memberId, urgent) // revealed to that viewer at once unless on its way, outside its R; [] clears
@@ -109,7 +115,7 @@ consumed, and the journal stops claiming those pieces, so a later session downlo
 - `stats` (1 Hz: speeds, progress, `missingAheadBytes`, `etaToEofS`, `dupFactor` and
   `uplink {rateBps, queueMs, state}` on the host (the upload scheduler's rate, the pacer's queueing-delay estimate
   and state), per-peer rows with `reattaches`: lanes to that member that opened after the first one, so a re-attach
-  ratchet shows)
+  ratchet shows; on a viewer `hashFails {total, worst}`, as `hashFailures()` returns it)
 - `disk-low`
 - `done` (also after a complete resume: once, on the next macrotask after `joinAsViewer` resolves)
 - `source-changed` (host; once per kind. `'changed'` stops seeding for good: the torrent is destroyed and `attach()`
@@ -264,6 +270,37 @@ viewers; at a saturated 20 / 50 Mbit/s uplink the ctrl RTT p50 46 / 42 ms (shipp
 sets its p95 (ctrl 127 / 157 ms, datagrams ~4× idle; ADR 0006 Follow-up 6), and a competing upload on the same uplink
 pushes it down to its floor (Follow-up 2).
 
+## Viewer download limit (`download-gate.ts`)
+
+ADR 0010. KiB/s like the upload limit; viewers only (a host downloads nothing: its torrent has no gate). WebTorrent's
+own `downloadLimit` throttles what the viewer reads, so the host keeps sending and the data waits in the viewer's RAM
+(S2), with `have`s and urgent blocks behind it. The gate holds back the requests instead, so nothing is sent that
+was not asked for:
+
+- **Bucket.** One per viewer torrent, shared by its wires: max(64 KiB, 0.25 s of the rate) deep. A request may go
+  while the bucket is above empty and is charged its block in full.
+- **Critical pieces borrow** up to max(64 KiB, 1 s of the rate) below empty: a blocked reader, the hot window,
+  critical ranges (`t._critical`, the Scheduler's urgent groups). A read mpv waits on arrives at link speed; the
+  average stays at the limit.
+- **Refund.** A failed request (a reject, also the host's preempt; a choke; a closed wire) gives its bytes back, also
+  for a piece replaced meanwhile, once per request.
+- **Kick.** Nothing in WebTorrent asks again once every request is answered, so a refusal sets one timer (10-1000 ms,
+  for when the refused request could go) that calls `torrent._update()`. Setting, raising or clearing the limit
+  kicks at once. Lowering it keeps at most the new depth and the new debt: debt borrowed at the old rate is
+  forgiven, or every request would wait while the new rate paid it back.
+- **Hooks** (`patches/webtorrent+3.0.21.patch`, `torrent._requestGate`, set right after `client.add`): `_request`
+  asks the gate before it reserves a block and charges it; `onChunk` refunds before its piece-identity check; the
+  walks in `validateWire` and `trySelectWire` stop at the first piece refused. The R6 order puts every critical piece
+  first, so nothing after a refusal could go. A critical piece a wire does not have is skipped before the check, so
+  under striping the wire to the viewer that holds it still borrows for it.
+
+The setting is `downloadLimitKBps`; the viewer session passes it in and applies changes live (session README
+"Transfer limits"), and `limitBps()` (`src/shared/limits.ts`) converts it here.
+
+Measured (256 KiB pieces, in-memory links): at 256 KiB/s, 2064 KiB in 8 s with nothing in transit between the
+host's wire and the viewer's; a reader blocked far in L2 at 128 KiB/s waited 875 ms (2 s without borrowing), and from
+another viewer under striping 740-874 ms (4.5 s without).
+
 ## Things that are easy to get wrong
 
 - **Protomux rejects a remote's channel open** unless this side has already created that channel, or a
@@ -303,6 +340,12 @@ pushes it down to its floor (Follow-up 2).
   same holds when the folder goes while a resumed export runs (any failure then is `dest-unavailable`), and for a
   folder that was a mount point when the save began (`destMount` in the journal): unmounted it is an empty folder on
   the parent's disk, so it counts as not there while its device equals its parent's.
+- **Hash failures have no event of their own.** A downloaded piece that fails its SHA-1 is reset and fetched again;
+  WebTorrent 3.0.21 says so only with a torrent `'warning'` whose message is `Piece <i> failed verification`
+  (torrent.js:2010), which the viewer engine parses into `hashFailures()`. The piece's sources are cleared before the
+  hash, so a failure cannot be pinned on a wire. A host whose bytes for a piece no longer match (a file rewritten in
+  place with its size and mtime kept, which the source watchdog cannot see, or a failing disk) gets the same request
+  again and again; the session layer reports the counts to the host, which warns (session README, "Hash failures").
 - **Back-pressure from the disk.** WebTorrent keeps requesting at network speed and holds every piece in memory until
   its `put` completes. Past 64 MiB of writes in flight the scheduler pauses (until < 16 MiB), combined with the
   disk-low pause: either reason keeps it paused.
@@ -340,3 +383,16 @@ process (`hostile-member.ts`), whose heartbeats the test watches. Either way, a 
 instead of hanging the run. `engine.test.ts` holds each viewer's handshake in the host's lane until the torrent adds
 the lane. That makes the window between 'ready' and the rest of `startHost` deterministic, so the wire hooks are
 tested inside it.
+
+`engine.test.ts` also rewrites a piece of the host's file in place and restores its mtime: the watchdog stays quiet,
+and the viewer counts that piece's hash failures. The host there is upload-limited: over the in-memory link an
+unlimited host answers each refetch without the loop ever leaving the microtask queue, so no timer (the test's
+deadline included) runs again.
+
+The download limit: `download-gate.test.ts` runs the bucket on a fake clock. The unit `engine.test.ts` drives the
+patched `_request` and `_updateWire` of a real viewer torrent with a fake wire and a recording gate (the check comes
+before the reservation, each failed block is refunded once, both walks stop at the first refusal), so a hook lost in
+a WebTorrent upgrade fails there. The integration `engine.test.ts` holds a viewer to 256 KiB/s with nothing in
+transit, lifts the limit, times a blocked read that borrows, checks the R6 order and a seek under a limit, and
+refetches a piece failing its hash at the limit; `revealer.test.ts` has a limited viewer borrow for a piece only
+another viewer holds.

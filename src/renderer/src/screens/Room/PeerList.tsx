@@ -1,5 +1,6 @@
 import { useState } from 'react'
 import type { MemberPhase, PeerPath, PeerView } from '../../../../shared/ipc/core'
+import { peerWarningText, peerWarningTone } from '../../../../shared/peer-warnings'
 import { Modal } from '../../components/ui'
 import { coverageRuns, decodeCoverage } from '../../lib/coverage'
 import { formatDrift, formatPercent, formatRate } from '../../lib/format'
@@ -149,8 +150,8 @@ function PeerRow(props: {
       {(p.warnings.length > 0 || p.lastError) && (
         <ul className={styles.warnings}>
           {p.warnings.map((w) => (
-            <li key={w}>
-              <span aria-hidden="true">⚠</span> {w}
+            <li key={w.code} data-tone={peerWarningTone(w)}>
+              <span aria-hidden="true">⚠</span> {peerWarningText(w)}
             </li>
           ))}
           {p.lastError && (

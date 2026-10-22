@@ -6,11 +6,13 @@ import type {
   PlaybackEvent,
   PlaybackIntent,
   Perms,
+  ResyncOutcome,
   Role,
   SyncEvent,
 } from '../../shared/ipc/core.js'
 import type { StartMode } from '../../shared/settings.js'
 import { CLOCK, ClockClient, pong } from './clock.js'
+import type { DesyncInfo } from './desync.js'
 import { GroupController, type GroupNotice, type GroupSnapshot } from './group.js'
 import { MemberController } from './member.js'
 import { type Clock, every, type PresenceEvent, type SyncPorts, type TimerHandle, type Unsubscribe } from './ports.js'
@@ -25,6 +27,7 @@ import {
   type SyncBusMessage,
   type SyncState,
   type SyncStatus,
+  type WarningCode,
 } from './protocol.js'
 
 // Composes clock, group (host only) and member for one role from the ports, and turns their state into the
@@ -61,6 +64,8 @@ export interface SyncEngineOptions {
   ports: SyncPorts
   /** the user's speed-nudge setting */
   nudge: boolean
+  /** viewer: the user's desync warning setting (ms behind; 0 or absent = off); the host never warns itself */
+  desyncWarnMs?: number
   /** host only */
   host?: {
     syncEpoch: number
@@ -85,15 +90,23 @@ interface Outgoing {
   intentId: string | null
 }
 
-/** The sync-owned fields of a PeerView; the lead merges them with net and transfer fields. */
+/**
+ * The sync-owned fields of a PeerView; the lead merges them with net and transfer fields, and turns the member's
+ * warning codes into PeerView.warnings (session/peer-view.ts).
+ */
 export type PeerSync = Pick<
   PeerView,
-  'id' | 'name' | 'phase' | 'driftMs' | 'bufferedAheadS' | 'coverage' | 'warnings' | 'exempt' | 'posS'
+  'id' | 'name' | 'phase' | 'driftMs' | 'bufferedAheadS' | 'coverage' | 'exempt' | 'posS'
 > & {
+  warnings: readonly WarningCode[]
+  /** seconds behind the room while the member's own desync warning shows ('behind'), else null */
+  behindS: number | null
   rateBps: number | null
   needBps: number | null
   lagMs: number | null
   clockErrMs: number | null
+  /** the member's own download limit, bytes/s, from its sync.status; null = none (or an older viewer) */
+  downLimitBps: number | null
 }
 
 export interface ClockInfo {
@@ -138,6 +151,8 @@ export class SyncEngine extends EventEmitter<SyncEngineEvents> {
   private lastRestoreKey = ''
   /** names the last barrier waited for, for "Started without Sam" */
   private lastWaitingFor: string[] = []
+  /** the member's desync warning, as last emitted (SyncEvent.desync) */
+  private desync: DesyncInfo | null = null
   private readonly helloAnswers: Coalescer
   private readonly requestNotices: Coalescer
   private readonly p: SyncPorts
@@ -174,6 +189,7 @@ export class SyncEngine extends EventEmitter<SyncEngineEvents> {
       offset: () => (this.clockClient ? this.clockClient.offset : 0),
       clockErrMs: () => (this.clockClient ? this.clockClient.errorMs : 0),
       nudge: o.nudge,
+      desyncWarnMs: isHost ? 0 : (o.desyncWarnMs ?? 0),
     })
     this.group =
       isHost && o.host
@@ -202,6 +218,12 @@ export class SyncEngine extends EventEmitter<SyncEngineEvents> {
     this.member.on('state', (st) => this.onApplied(st))
     this.member.on('playback', (e) => this.emit('playback', e))
     this.member.on('hostGone', (gone) => this.emit('notice', hostGoneNotice(gone)))
+    // the sync event again, and nothing else: no state, no cause notice (those belong to a newly applied state)
+    this.member.on('desync', (d) => {
+      this.desync = d
+      const st = this.member.state
+      if (st) this.emit('sync', this.toSyncEvent(st))
+    })
     this.subs = [
       bus.onMessage((from, raw) => this.onBus(from, raw)),
       datagram.onMessage((from, data) => this.onDatagram(from, data)),
@@ -257,6 +279,18 @@ export class SyncEngine extends EventEmitter<SyncEngineEvents> {
 
   setNudge(on: boolean): void {
     this.member.setNudge(on)
+  }
+
+  /** Viewer: the desync warning setting changed (ms, 0 = off). */
+  setDesyncWarn(ms: number): void {
+    if (this.group) return
+    this.member.setDesyncWarn(ms)
+  }
+
+  /** Viewer: playback.resync, local only (MemberController.resync). The host has nothing to resync with. */
+  resync(): ResyncOutcome {
+    if (this.group) return 'not-ready'
+    return this.member.resync()
   }
 
   roomPosition(): number | null {
@@ -617,6 +651,7 @@ export class SyncEngine extends EventEmitter<SyncEngineEvents> {
       if (c.from !== undefined) ev.cause.from = c.from
       if (c.to !== undefined) ev.cause.to = c.to
     }
+    if (this.desync) ev.desync = { ...this.desync }
     return ev
   }
 
@@ -634,14 +669,18 @@ export class SyncEngine extends EventEmitter<SyncEngineEvents> {
           bufferedAheadS: m.status?.bufferedAheadS ?? null,
           coverage: m.status?.coverage ?? null,
           warnings: m.status?.warnings ?? [],
+          behindS: m.status?.behindS ?? null,
           posS: m.status?.pos ?? null,
           rateBps: m.status?.rateBps ?? null,
           needBps: m.status?.needBps ?? null,
           lagMs: m.status?.lagMs ?? null,
           clockErrMs: m.status?.clockErrMs ?? null,
+          downLimitBps: m.status?.downLimitBps ?? null,
         }))
     }
     const st = this.member.state
+    // a viewer hears no one's status but its own: other rows have no warnings, rates or buffer
+    const own = this.member.lastStatus
     return (st?.members ?? []).map((m) => {
       const self = m.peerId === this.o.selfId
       return {
@@ -650,14 +689,16 @@ export class SyncEngine extends EventEmitter<SyncEngineEvents> {
         phase: self ? this.member.currentPhase : m.phase,
         exempt: m.exempt,
         driftMs: self ? this.member.drift.driftMs : null,
-        bufferedAheadS: null,
+        bufferedAheadS: self ? (own?.bufferedAheadS ?? null) : null,
         coverage: null,
-        warnings: [],
+        warnings: self ? (own?.warnings ?? []) : [],
+        behindS: self && this.desync?.state === 'behind' ? this.desync.behindS : null,
         posS: null,
-        rateBps: null,
-        needBps: null,
+        rateBps: self ? (own?.rateBps ?? null) : null,
+        needBps: self ? (own?.needBps ?? null) : null,
         lagMs: self ? this.member.lagP95Ms : null,
         clockErrMs: self ? (this.clockClient?.errorMs ?? null) : null,
+        downLimitBps: self ? (own?.downLimitBps ?? null) : null,
       }
     })
   }

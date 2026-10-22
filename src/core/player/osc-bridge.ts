@@ -51,6 +51,8 @@ export interface OscStrings {
   subsShown: string
   noTracks: string
   locked: string
+  /** the bar's button while a viewer is behind the host (Shift+R) */
+  resync: string
 }
 
 export const DEFAULT_OSC_STRINGS: OscStrings = {
@@ -62,6 +64,7 @@ export const DEFAULT_OSC_STRINGS: OscStrings = {
   subsShown: 'Subtitles shown',
   noTracks: 'No tracks',
   locked: 'The host controls this',
+  resync: 'Resync to live',
 }
 
 /** What callers pass to `send` (colours as #RRGGBB, unmerged spans). */
@@ -73,6 +76,8 @@ export interface OscMessages {
   status: OscStatus
   toast: OscToast
   ended: { ended: boolean }
+  /** a viewer behind the host: the bar shows its Resync to live button */
+  resync: { shown: boolean }
 }
 export type OscKind = keyof OscMessages
 
@@ -94,7 +99,7 @@ export interface OscInit {
   persistentStrip: boolean
 }
 
-export type OscIntentKind = 'play' | 'pause' | 'toggle' | 'seek' | 'seek-rel' | 'close' | 'show-app'
+export type OscIntentKind = 'play' | 'pause' | 'toggle' | 'seek' | 'seek-rel' | 'close' | 'show-app' | 'resync'
 export interface OscIntent {
   t: OscIntentKind
   pos?: number
@@ -137,11 +142,11 @@ interface OscBridgeEvents {
   intent: [OscIntent]
 }
 
-type Sticky = 'ranges' | 'peers' | 'status' | 'ended'
+type Sticky = 'ranges' | 'peers' | 'status' | 'ended' | 'resync'
 
 /**
  * One instance per player; `attach` is called for every mpv process (the OSC restarts with it).
- * Keeps the latest theme/perms/ranges/peers/status so a restarted OSC is brought up to date, and the latest
+ * Keeps the latest theme/perms/ranges/peers/status/resync so a restarted OSC is brought up to date, and the latest
  * toast sent before the OSC was up (TOAST_KEEP_MS).
  */
 export class OscBridge extends EventEmitter<OscBridgeEvents> {
@@ -219,7 +224,7 @@ export class OscBridge extends EventEmitter<OscBridgeEvents> {
       const perms = JSON.stringify(this.perms)
       if (theme !== this.initSent?.theme) this.post('theme', theme)
       if (perms !== this.initSent?.perms) this.post('perms', perms)
-      for (const kind of ['ranges', 'peers', 'status', 'ended'] as const) {
+      for (const kind of ['ranges', 'peers', 'status', 'ended', 'resync'] as const) {
         const body = this.sticky[kind]
         if (body !== undefined) this.post(kind, body)
       }
@@ -263,6 +268,10 @@ export class OscBridge extends EventEmitter<OscBridgeEvents> {
       case 'ended':
         this.sticky.ended = JSON.stringify(payload)
         this.postIfReady('ended', this.sticky.ended)
+        return
+      case 'resync':
+        this.sticky.resync = JSON.stringify(payload)
+        this.postIfReady('resync', this.sticky.resync)
         return
       case 'toast': {
         const body = JSON.stringify(payload)
@@ -395,7 +404,16 @@ export function capSpans(spans: readonly Span[], max: number): Span[] {
   return merged.map(([s, e]) => [round3(s), round3(e)])
 }
 
-const INTENT_KINDS = new Set<OscIntentKind>(['play', 'pause', 'toggle', 'seek', 'seek-rel', 'close', 'show-app'])
+const INTENT_KINDS = new Set<OscIntentKind>([
+  'play',
+  'pause',
+  'toggle',
+  'seek',
+  'seek-rel',
+  'close',
+  'show-app',
+  'resync',
+])
 
 export function parseIntent(json: string | undefined): OscIntent | null {
   if (json === undefined) return null

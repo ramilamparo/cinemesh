@@ -334,6 +334,48 @@ describe('Revealer urgent pieces (blockedPieces -> setViewerUrgent)', () => {
     }
   })
 
+  it('a viewer at a download limit gets a piece another viewer holds from that viewer, borrowing past its limit', async () => {
+    // ADR 0010: under its limit a's walk on the host wire stops at the first piece refused; the blocked piece is not
+    // on that wire (the host does not reveal what b holds), so it is requested on a's wire to b, which borrows
+    const r = await room(['a', 'b'], 1000)
+    try {
+      r.connect('host', 'a')
+      r.connect('host', 'b')
+      r.connect('a', 'b')
+      const a = r.viewers.get('a') as TransferEngine
+      const b = r.viewers.get('b') as TransferEngine
+      for (const [id, v] of r.viewers) v.on('blocked-changed', (pieces) => r.host.setViewerUrgent(id, pieces))
+      a.setDownloadLimit(128)
+      await until(() => [...views(r.host).values()].filter((v) => !v.open).length === 2, 10_000, 'striping')
+      await sleep(2000) // a fetches its share at its limit: its bucket is empty
+      const K = PIECES - 10 // far past the frontier
+      for (const v of views(r.host).values()) expect(v.revealed[K]).toBe(0)
+      const readerB = b.streamSource?.openReader(0, K * P)
+      readerB?.blockedOn(K)
+      await until(() => wireTo(a, 'b')?.peerPieces.get(K) === true, 5000, "b's have")
+      const verified = new Promise<number>((resolve) =>
+        a.on('verified', (i) => {
+          if (i === K) resolve(performance.now())
+        }),
+      )
+      const started = performance.now()
+      const fromB = wireTo(a, 'b')?.downloaded ?? 0
+      const readerA = a.streamSource?.openReader(0, K * P)
+      readerA?.blockedOn(K)
+      const ms = (await Promise.race([verified, sleep(8000).then(() => Number.NaN)])) - started
+      const summary = JSON.stringify({ ms: Math.round(ms), fromB: (wireTo(a, 'b')?.downloaded ?? 0) - fromB })
+      // its 256 KiB at a's 128 KiB/s take 2 s; borrowing 1 s of it, 1 s. The host would send it after 3 s without
+      // a request (the on-its-way check), and did not have to
+      expect(ms, summary).toBeLessThan(1500)
+      expect(views(r.host).get('a')?.revealed[K], summary).toBe(0)
+      expect((wireTo(a, 'b')?.downloaded ?? 0) - fromB, summary).toBeGreaterThanOrEqual(P)
+      readerA?.close()
+      readerB?.close()
+    } finally {
+      await r.close()
+    }
+  })
+
   it('verifies a piece a reader blocks on far past the frontier in under 0.6 s (median) with 3 viewers at 1 MB/s', async () => {
     // ADR 0006 Part A: the viewers download all the time (the host's upload is the bottleneck); every 1.5 s one of
     // them, in turn, reads a piece nobody holds or was shown. As shipped the median was 1.9 s (p95 3.8): the have, the

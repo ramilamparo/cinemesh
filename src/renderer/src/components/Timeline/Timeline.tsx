@@ -106,13 +106,17 @@ export function Timeline(): React.JSX.Element {
     canvas.height = Math.round(TIMELINE_HEIGHT * size.dpr)
   }, [size])
 
-  // Redraw on any change, and every frame while playback moves.
+  // Redraw on any change, and every frame while playback moves; always inside an animation frame. A draw outside
+  // one makes Chromium's 2D-canvas rate limiter block the main thread on the GPU process, which on X11 waits for
+  // the previous swap: ~1 s per draw while the window is not shown (screen locked, other workspace, behind mpv).
   useEffect(() => {
-    draw()
-    if (!playhead.moving || typeof requestAnimationFrame !== 'function') return
+    if (typeof requestAnimationFrame !== 'function') {
+      draw()
+      return
+    }
     let raf = requestAnimationFrame(function frame() {
       draw()
-      raf = requestAnimationFrame(frame)
+      if (playhead.moving) raf = requestAnimationFrame(frame)
     })
     return () => cancelAnimationFrame(raf)
   }, [draw, playback])

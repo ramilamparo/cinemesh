@@ -172,6 +172,30 @@ function SettingsBody({ settings, onClose }: { settings: Settings; onClose: () =
           onChange={(on) => set('speedNudge', on)}
         />
         <Switch
+          label="Warn when I fall behind"
+          description="Show a warning and a Resync to live button when your playback is behind the host."
+          checked={form.desyncWarn}
+          onChange={(on) => {
+            set('desyncWarn', on)
+            // off saves 0 whatever the seconds field holds, and on starts it over: its old error no longer applies
+            setErrors((e) => ({ ...e, desyncWarnS: undefined }))
+          }}
+        />
+        <Field label="Seconds behind before warning" hint="0.5 to 30 seconds." error={errors.desyncWarnS}>
+          {(ids) => (
+            <input
+              {...ids}
+              type="number"
+              min={0.5}
+              max={30}
+              step={0.5}
+              disabled={!form.desyncWarn}
+              value={form.desyncWarnS}
+              onChange={(e) => set('desyncWarnS', e.target.value)}
+            />
+          )}
+        </Field>
+        <Switch
           label="Always show the download strip in the player"
           checked={form.oscPersistentStrip}
           onChange={(on) => set('oscPersistentStrip', on)}
@@ -219,13 +243,31 @@ function SettingsBody({ settings, onClose }: { settings: Settings; onClose: () =
               <input {...ids} type="number" value={form.udpPort} onChange={(e) => set('udpPort', e.target.value)} />
             )}
           </Field>
-          <Field label="Upload limit (KB/s)" hint="Empty for no limit." error={errors.uploadLimitKBps}>
+          <Field
+            label="Upload limit (KB/s)"
+            hint="Hosting and watching. Empty for no limit."
+            error={errors.uploadLimitKBps}
+          >
             {(ids) => (
               <input
                 {...ids}
                 type="number"
                 value={form.uploadLimitKBps}
                 onChange={(e) => set('uploadLimitKBps', e.target.value)}
+              />
+            )}
+          </Field>
+          <Field
+            label="Download limit (KB/s)"
+            hint="Watching only. Empty for no limit."
+            error={errors.downloadLimitKBps}
+          >
+            {(ids) => (
+              <input
+                {...ids}
+                type="number"
+                value={form.downloadLimitKBps}
+                onChange={(e) => set('downloadLimitKBps', e.target.value)}
               />
             )}
           </Field>

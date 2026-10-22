@@ -1,5 +1,7 @@
 import { EventEmitter } from 'node:events'
-import type { MemberPhase, PlaybackEvent } from '../../shared/ipc/core.js'
+import type { MemberPhase, PlaybackEvent, ResyncOutcome } from '../../shared/ipc/core.js'
+import { SLOW_RATE_FACTOR } from '../../shared/limits.js'
+import { type DesyncInfo, DesyncMonitor } from './desync.js'
 import { DRIFT, DriftController } from './drift.js'
 import type {
   Clock,
@@ -57,8 +59,11 @@ export const MEMBER = {
   LAG_WINDOW: 20,
   /** a state older than this is a sticky replay, not a measure of how late states arrive */
   LAG_MAX_MS: 5000,
-  SLOW_RATE_FACTOR: 1.1,
+  /** shared with the renderer's note on a download limit (shared/limits.ts) */
+  SLOW_RATE_FACTOR,
   SLOW_RATE_MS: 15_000,
+  /** a slow-download warning clears only after this long at SLOW_RATE_FACTOR × need: a rate near it would flicker */
+  SLOW_CLEAR_MS: 10_000,
   /** mpv lands a seek or load on the first frame at or after target − 5 ms (ADR 0007 Finding 4) */
   LANDING_SLOP_S: 0.005,
   FRAME_DROP_WINDOW_MS: 10_000,
@@ -67,6 +72,8 @@ export const MEMBER = {
   /** a load mpv could not open is tried again after this, doubling up to LOAD_RETRY_MAX_MS */
   LOAD_RETRY_MIN_MS: 1000,
   LOAD_RETRY_MAX_MS: 30_000,
+  /** the user's Resync: one per this long, others answer 'busy' */
+  RESYNC_MIN_GAP_MS: 2000,
 } as const
 
 export type StateFast = Extract<Datagram, { type: typeof DGRAM_STATE_FAST }>
@@ -110,6 +117,8 @@ export interface MemberOptions {
   clockErrMs(): number | null
   /** the user's speed-nudge setting */
   nudge: boolean
+  /** warn once this many ms behind the room (DesyncMonitor); 0 or absent = off, as for the host's own member */
+  desyncWarnMs?: number
 }
 
 export interface MemberEvents {
@@ -119,6 +128,8 @@ export interface MemberEvents {
   playback: [PlaybackEvent]
   /** true when the 10 s grace ran out and playback paused; false when the host came back */
   hostGone: [boolean]
+  /** the "behind the host" warning changed (null: in sync, or off) */
+  desync: [DesyncInfo | null]
 }
 
 const clamp = (x: number, lo: number, hi: number): number => Math.min(hi, Math.max(lo, x))
@@ -155,8 +166,13 @@ export class MemberController extends EventEmitter<MemberEvents> {
   private buffering = false
   private lastTimePos: number | null = null
   private lastMoveAt = 0
-  private slowSince: number | null = null
+  /** below SLOW_RATE_FACTOR × need since; warned once SLOW_RATE_MS passed; fast enough again since */
+  private slow: { since: number; warned: boolean; okSince: number | null } | null = null
+  /** frame-drop counter samples over FRAME_DROP_WINDOW_MS, taken only while playing */
   private readonly drops: { at: number; n: number }[] = []
+  private lastStatusValue: SyncStatus | null = null
+  private readonly desync: DesyncMonitor
+  private lastResyncAt = -Infinity
   private lastReportKey = ''
   private timers: TimerHandle[] = []
   private subs: Unsubscribe[] = []
@@ -171,6 +187,7 @@ export class MemberController extends EventEmitter<MemberEvents> {
     this.player = o.player
     this.media = o.media
     this.nudge = o.nudge
+    this.desync = new DesyncMonitor(o.desyncWarnMs ?? 0)
   }
 
   start(): void {
@@ -217,6 +234,16 @@ export class MemberController extends EventEmitter<MemberEvents> {
     return this.unpauseLatMs
   }
 
+  /** The "behind the host" warning as shown now; null when in sync or off. */
+  get desyncState(): DesyncInfo | null {
+    return this.desync.info
+  }
+
+  /** The last sync.status sent (null before the first): the viewer's own peer-list row shows its warnings. */
+  get lastStatus(): SyncStatus | null {
+    return this.lastStatusValue
+  }
+
   get lagP95Ms(): number {
     if (this.lags.length === 0) return 0
     const s = [...this.lags].sort((a, b) => a - b)
@@ -257,6 +284,52 @@ export class MemberController extends EventEmitter<MemberEvents> {
     this.updateNudge(this.player.snapshot())
   }
 
+  /**
+   * The user's desync warning setting (0 = off), applied on every settings change: a new value clears what is shown
+   * and measures the lag afresh; the same one changes nothing.
+   */
+  setDesyncWarn(ms: number): void {
+    if (this.desync.configure(ms)) this.emitDesync()
+  }
+
+  /**
+   * The user's Resync: meet the room on this machine only. Never an intent: no permission applies, and the room (its
+   * mode and anchor) and the other members do not move. Behind: skip to the room when the data there is here, else
+   * rendezvous with it further ahead (which also moves the download there). Ahead: wait paused. A stall ends with
+   * it: the member leaves the position it waits at, so a host still in its buffering grace stops waiting for it (it
+   * never opens a barrier: only 'buffering' does).
+   */
+  resync(): ResyncOutcome {
+    if (this.st?.mode !== 'playing' || this.hostGone !== null) return 'not-playing'
+    const snap = this.player.snapshot()
+    const a = this.act
+    const ready =
+      snap.available &&
+      snap.loaded &&
+      this.loadPending === null &&
+      this.landing === null &&
+      a.k !== 'idle' &&
+      a.k !== 'settle' &&
+      a.k !== 'hold'
+    if (!ready) return 'not-ready'
+    const now = this.clock.now()
+    if (a.k !== 'playing' || now - this.lastResyncAt < MEMBER.RESYNC_MIN_GAP_MS) return 'busy'
+    const pos = this.ownPosition(snap)
+    if (pos === null || this.o.offset() === null) return 'not-ready'
+    const lagMs = (this.expectedAt(now) - pos) * 1000
+    // the drift loop owns small errors, a stall's included: it ends where it began
+    if (Math.abs(lagMs) <= MEMBER.RECOVER_BEHIND_MS) return 'in-sync'
+    this.lastResyncAt = now
+    this.buffering = false
+    let outcome: ResyncOutcome
+    if (lagMs < 0) {
+      this.pauseWait(pos)
+      outcome = 'wait'
+    } else outcome = this.catchUp()
+    if (this.desync.markResync()) this.emitDesync()
+    return outcome
+  }
+
   applyState(next: SyncState): void {
     this.accept(next, 'bus')
   }
@@ -278,7 +351,10 @@ export class MemberController extends EventEmitter<MemberEvents> {
 
   /** The θ̂ estimate changed; jumped means by >= 15 ms or the first estimate. */
   onOffset(jumped: boolean): void {
-    if (jumped) this.drift.hold(this.clock.now(), DRIFT.CLOCK_HOLD_MS)
+    if (jumped) {
+      this.drift.hold(this.clock.now(), DRIFT.CLOCK_HOLD_MS)
+      this.desync.restartTimers()
+    }
     const st = this.st
     if (st?.mode !== 'playing') return
     if (this.act.k === 'idle') this.reconcile()
@@ -328,10 +404,13 @@ export class MemberController extends EventEmitter<MemberEvents> {
     this.noteLag(next.sentAt)
     this.st = next
     this.fastOnly = via === 'fast'
-    this.emit('state', next)
     const force = this.forceNext && via === 'bus'
     if (force) this.forceNext = false
-    if (!force && cur?.syncEpoch === next.syncEpoch && sameActuation(cur, next)) {
+    const same = !force && cur?.syncEpoch === next.syncEpoch && sameActuation(cur, next)
+    // the room moved: a desync warning is over before anyone hears of the new state
+    if (!same) this.resetDesync()
+    this.emit('state', next)
+    if (same) {
       this.report(false)
       return
     }
@@ -342,11 +421,13 @@ export class MemberController extends EventEmitter<MemberEvents> {
   private reconcile(meet = false): void {
     this.gen++
     this.strictLate = true
+    this.resetDesync()
     this.lastSample = null
     this.cancelUnpause()
     this.readyFor = null
     this.probe = null
     this.buffering = false
+    this.drops.length = 0
     const st = this.st
     const snap = this.player.snapshot()
     if (!snap.available) {
@@ -597,12 +678,16 @@ export class MemberController extends EventEmitter<MemberEvents> {
   }
 
   /** Behind the room: skip forward if the target is buffered, otherwise rendezvous. */
-  private catchUp(): void {
+  private catchUp(): 'skip' | 'rendezvous' {
     const now = this.clock.now()
     const t1 = this.clampPos(this.expectedAt(now + this.drift.seekLatMs))
     const snap = this.player.snapshot()
-    if (!snap.paused && this.media.bufferedAheadS(t1) >= MEMBER.SKIP_MIN_AHEAD_S) this.skip(t1)
-    else this.rendezvous()
+    if (!snap.paused && this.media.bufferedAheadS(t1) >= MEMBER.SKIP_MIN_AHEAD_S) {
+      this.skip(t1)
+      return 'skip'
+    }
+    this.rendezvous()
+    return 'rendezvous'
   }
 
   private skip(target: number): void {
@@ -610,6 +695,7 @@ export class MemberController extends EventEmitter<MemberEvents> {
     this.cancelUnpause()
     this.probe = null
     this.lastSample = null
+    this.drops.length = 0
     this.media.playhead.set(target, 'catchup')
     this.player.seek(target)
     this.act = { k: 'skip', target, startedAt: this.clock.now() }
@@ -786,6 +872,7 @@ export class MemberController extends EventEmitter<MemberEvents> {
     // Forget where we think the player is: it moved behind our back.
     this.gen++
     this.cancelUnpause()
+    this.resetDesync()
     if (st.mode === 'playing') {
       const snap = this.player.snapshot()
       this.act = snap.paused ? { k: 'idle' } : { k: 'playing' }
@@ -827,7 +914,40 @@ export class MemberController extends EventEmitter<MemberEvents> {
       const g = this.gen
       this.player.sample((s) => this.onSample(s, g))
     }
+    this.checkDesync()
     this.emit('playback', this.playbackEvent())
+  }
+
+  /**
+   * The desync warning's tick. It applies while the room plays and this member plays in it, or catches up with it:
+   * not while idle, settled for a paused room, loading, held for an absent host (nor in the grace before: the host
+   * disconnected notice says enough), out of disk, or before the clock is known.
+   */
+  private checkDesync(): void {
+    const now = this.clock.now()
+    const snap = this.player.snapshot()
+    const a = this.act
+    const catchingUp = a.k === 'skip' || a.k === 'prep' || a.k === 'scheduled'
+    const active =
+      this.st?.mode === 'playing' &&
+      this.hostGone === null &&
+      snap.available &&
+      snap.loaded &&
+      this.loadPending === null &&
+      !this.o.transfer.diskFull() &&
+      (a.k === 'playing' || catchingUp)
+    const err = this.o.clockErrMs()
+    const pos = this.ownPosition(snap)
+    const lagMs = err === null || pos === null || this.o.offset() === null ? null : (this.expectedAt(now) - pos) * 1000
+    if (this.desync.step(now, { active, catchingUp, lagMs, errMs: err ?? 0 })) this.emitDesync()
+  }
+
+  private resetDesync(): void {
+    if (this.desync.reset()) this.emitDesync()
+  }
+
+  private emitDesync(): void {
+    this.emit('desync', this.desync.info)
   }
 
   private onSample(s: PositionSample | null, g: number): void {
@@ -937,6 +1057,11 @@ export class MemberController extends EventEmitter<MemberEvents> {
       etaS: eta === null ? null : finite(eta),
     }
     if (this.readyFor !== null) s.barrierId = this.readyFor
+    const desync = this.desync.info
+    if (desync?.state === 'behind') s.behindS = Math.max(0, finite(desync.behindS))
+    const downLimit = this.o.transfer.downLimitBps?.() ?? null
+    if (downLimit !== null) s.downLimitBps = Math.max(0, finite(downLimit))
+    this.lastStatusValue = s
     return s
   }
 
@@ -946,10 +1071,20 @@ export class MemberController extends EventEmitter<MemberEvents> {
     const need = this.media.needBps()
     const rate = this.o.transfer.rateBps()
     const done = this.o.transfer.etaToEofS() === 0
-    if (need > 0 && !done && rate < MEMBER.SLOW_RATE_FACTOR * need) this.slowSince ??= now
-    else this.slowSince = null
-    if (this.slowSince !== null && now - this.slowSince >= MEMBER.SLOW_RATE_MS) out.push('slow-download')
-    this.drops.push({ at: now, n: snap.frameDrops })
+    if (need <= 0 || done) this.slow = null
+    else if (rate < MEMBER.SLOW_RATE_FACTOR * need) {
+      this.slow ??= { since: now, warned: false, okSince: null }
+      this.slow.okSince = null
+      if (now - this.slow.since >= MEMBER.SLOW_RATE_MS) this.slow.warned = true
+    } else if (this.slow?.warned) {
+      this.slow.okSince ??= now
+      if (now - this.slow.okSince >= MEMBER.SLOW_CLEAR_MS) this.slow = null
+    } else this.slow = null
+    if (this.slow?.warned) out.push('slow-download')
+    // Counted only while playing, outside the drift loop's holds: a seek, start or audio restart drops frames on
+    // its own. A gap starts the window afresh.
+    if (this.act.k === 'playing' && !this.drift.holding(now)) this.drops.push({ at: now, n: snap.frameDrops })
+    else this.drops.length = 0
     while (this.drops.length > 0 && now - (this.drops[0]?.at ?? now) > MEMBER.FRAME_DROP_WINDOW_MS) this.drops.shift()
     const first = this.drops[0]
     if (first && snap.frameDrops - first.n >= MEMBER.FRAME_DROP_MIN) out.push('frame-drops')
@@ -988,6 +1123,14 @@ export class MemberController extends EventEmitter<MemberEvents> {
     if (a.k === 'settle' || a.k === 'prep') return targetOf(a)
     if (a.k === 'scheduled') return a.pos
     return snap.timePosS ?? this.st?.anchor.pos ?? 0
+  }
+
+  /**
+   * Where this member plays now, for the desync warning and Resync: stuck at mpv's time-pos while buffering (the
+   * last sample would run on), else localPosition().
+   */
+  private ownPosition(snap: PlayerSnapshot): number | null {
+    return this.buffering ? snap.timePosS : this.localPosition()
   }
 
   /** Exact paused position if we put the player there, else mpv's (frame-quantised) time-pos. */

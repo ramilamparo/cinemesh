@@ -4,11 +4,14 @@ import { themePayload } from '../../shared/theme-tokens.js'
 import type { RoomEvent } from '../../shared/ipc/core.js'
 import type { CoreLog } from '../log.js'
 import type { RoomStore } from '../net/identity.js'
-import type { Room, RoomState } from '../net/room.js'
+import type { MemberView, Room, RoomState } from '../net/room.js'
 import { PlayerController, type PlayerControllerOptions } from '../player/player-controller.js'
 import type { SyncEngine } from '../sync/engine.js'
+import type { PeerWarning } from '../../shared/peer-warnings.js'
+import type { ResyncOutcome } from '../../shared/ipc/core.js'
 import type { PeerTransferStats } from '../transfer/engine.js'
 import { BaseSession, type MpvChoice, type SessionDeps } from './base-session.js'
+import type { FakePlayer } from './fake-player.js'
 import type { PlayerHolder } from './player-holder.js'
 import { SYNC_BUS_POLICIES } from './sync-ports.js'
 
@@ -36,7 +39,7 @@ const fakeRoom = {
 } as unknown as Room
 
 class TestSession extends BaseSession {
-  readonly role = 'host' as const
+  readonly role: 'host' | 'viewer' = 'host'
   replaced = 0
   blocked = false
 
@@ -263,6 +266,28 @@ describe('BaseSession.startSync', () => {
   })
 })
 
+describe('BaseSession.updateSettings', () => {
+  // the fake room, plus the room settings updateSettings passes on first
+  const room = Object.assign(Object.create(fakeRoom) as Room, { updateSettings: () => undefined })
+
+  class ViewerLike extends TestSession {
+    readonly limits: (number | null)[] = []
+    protected override applyDownloadLimit(kbps: number | null): void {
+      this.limits.push(kbps)
+    }
+  }
+
+  it('applies the download limit live; a host-shaped session ignores it', () => {
+    const viewer = new ViewerLike(deps(), room)
+    viewer.updateSettings({ ...defaultSettings(), uploadLimitKBps: 200, downloadLimitKBps: 300 })
+    viewer.updateSettings({ ...defaultSettings(), downloadLimitKBps: null })
+    expect(viewer.limits).toEqual([300, null])
+    expect(() =>
+      new TestSession(deps(), room).updateSettings({ ...defaultSettings(), downloadLimitKBps: 300 }),
+    ).not.toThrow()
+  })
+})
+
 describe('BaseSession room event', () => {
   it('names the member who relayed a pending join request, and no one for a request that came straight', () => {
     const rooms: RoomEvent[] = []
@@ -284,5 +309,107 @@ describe('BaseSession room event', () => {
       { id: 'a1', name: 'Ann' },
       { id: 'b2', name: 'Bo', via: 'Kim' },
     ])
+  })
+})
+
+describe('BaseSession in mpv', () => {
+  const member = (id: string, name: string, self = false): MemberView => ({
+    id,
+    name,
+    role: self ? 'host' : 'viewer',
+    self,
+    isHost: self,
+    path: self ? 'none' : 'direct',
+    rttMs: 20,
+    linked: true,
+  })
+  const room = Object.assign(Object.create(fakeRoom) as Room, {
+    members: () => [member('me', 'Host', true), member('v1', 'Sam')],
+  })
+
+  /** A session on a FakePlayer, as host or viewer, with the session's warnings and sync's resync stubbed. */
+  class InMpv extends TestSession {
+    override readonly role: 'host' | 'viewer'
+    warnings = new Map<string, readonly PeerWarning[]>()
+    resyncs: ResyncOutcome[] = []
+    outcome: ResyncOutcome = 'skip'
+
+    constructor(role: 'host' | 'viewer') {
+      super(deps({ fakePlayer: true }), room)
+      this.role = role
+      // sync's resync, recorded; stop for the leave
+      const sync: Pick<SyncEngine, 'roomPosition' | 'resync' | 'stop'> = {
+        roomPosition: () => null,
+        resync: () => {
+          this.resyncs.push(this.outcome)
+          return this.outcome
+        },
+        stop: () => undefined,
+      }
+      this.setSync(sync)
+    }
+    get fake(): FakePlayer {
+      return this.playerHolder()?.player as FakePlayer
+    }
+    toasts(): unknown[] {
+      return this.fake.oscLog.filter((o) => o.kind === 'toast').map((o) => o.payload)
+    }
+    tick(): void {
+      this.emitPeers()
+    }
+    protected override peerWarnings(): ReadonlyMap<string, readonly PeerWarning[]> {
+      return this.warnings
+    }
+  }
+  const slow: PeerWarning = { code: 'slow-download', rateBps: null, needBps: null, bufferInS: null, limitBps: null }
+
+  it("the host toasts a member's slow download once as it appears; not 'behind' or frame drops", async () => {
+    const host = new InMpv('host')
+    host.openPlayer()
+    host.warnings.set('v1', [{ code: 'behind', behindS: 3 }, { code: 'frame-drops' }])
+    host.tick()
+    expect(host.toasts()).toEqual([])
+    host.warnings.set('v1', [{ code: 'behind', behindS: 3 }, slow, { code: 'frame-drops' }])
+    host.tick()
+    host.tick()
+    expect(host.toasts()).toEqual([{ text: 'Sam: download too slow' }])
+    await host.finishLeave()
+  })
+
+  it('a viewer never toasts other rows', async () => {
+    const viewer = new InMpv('viewer')
+    viewer.openPlayer()
+    viewer.warnings.set('v1', [slow])
+    viewer.tick()
+    expect(viewer.toasts()).toEqual([])
+    await viewer.finishLeave()
+  })
+
+  it('Shift+R or the bar button resyncs a viewer, toasting only what changed nothing; the host has no resync', async () => {
+    const viewer = new InMpv('viewer')
+    viewer.openPlayer()
+    const press = (s: InMpv): void => void s.fake.emit('intent', { kind: 'resync', src: 'osc', seq: 1 })
+    // a catch-up shows itself in the status line: no toast
+    press(viewer)
+    expect(viewer.resyncs).toEqual(['skip'])
+    expect(viewer.toasts()).toEqual([])
+    for (const outcome of ['in-sync', 'not-playing', 'not-ready', 'busy'] as const) {
+      viewer.outcome = outcome
+      press(viewer)
+    }
+    expect(viewer.toasts()).toEqual([
+      { text: 'Already in sync' },
+      { text: "The room isn't playing" },
+      { text: 'Playback is not ready yet' },
+    ])
+    await viewer.finishLeave()
+
+    const host = new InMpv('host')
+    host.openPlayer()
+    host.outcome = 'in-sync'
+    press(host)
+    expect(host.resyncs).toEqual([])
+    expect(host.toasts()).toEqual([])
+    await host.finishLeave()
   })
 })
