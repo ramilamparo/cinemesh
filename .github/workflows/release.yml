@@ -4,12 +4,13 @@
 #      the new version (scripts/changelog.mjs), commits "Release <version>" to main and tags v<version>;
 #   2. ci: runs the whole CI workflow on that tag (ci.yml, workflow_call), which builds, checks and smoke-launches
 #      every package, named with the version;
-#   3. release: publishes the GitHub release "Cinemesh <version>" (marked latest, or pre-release for a version like
-#      1.2.0-beta.1) with the packages, SHA256SUMS and the mpv source tarball that
+#   3. release: creates the DRAFT GitHub release "Cinemesh <version>" (pre-release for a version like 1.2.0-beta.1)
+#      with the packages, SHA256SUMS and the mpv source tarball that
 #      resources/licenses/mpv/SOURCE-OFFER.md promises; its notes are the version's CHANGELOG section and a download
 #      table. With the MINISIGN_SECRET_KEY secret set (an unencrypted key from `minisign -G -W`), SHA256SUMS is also
 #      signed (SHA256SUMS.minisig).
-# Dry run: builds every package with the next version and prints the notes, but pushes nothing and publishes nothing.
+# Publishing the draft (Releases page, Edit, Publish release) stays a manual check. Dry run: builds every package with
+# the next version and prints the notes, but pushes nothing and creates no release.
 # A v* tag pushed by hand (after `npm version` locally) releases too: steps 2 and 3, once the tag is checked against
 # package.json and CHANGELOG.md. The builds are unsigned (ad-hoc on macOS): docs/install.md.
 name: Release
@@ -27,7 +28,7 @@ on:
         type: string
         default: ''
       dry-run:
-        description: Dry run (build and show the notes; push and publish nothing)
+        description: Dry run (build and show the notes; push nothing, create no release)
         type: boolean
         default: false
   push:
@@ -130,7 +131,7 @@ jobs:
       contents: read
 
   release:
-    name: publish
+    name: draft release
     needs: [prepare, ci]
     runs-on: ubuntu-24.04
     timeout-minutes: 20
@@ -226,22 +227,26 @@ jobs:
           EOF
           cat "$RUNNER_TEMP/notes.md"
           { echo "## Cinemesh $VERSION"; echo; cat "$RUNNER_TEMP/notes.md"; } >> "$GITHUB_STEP_SUMMARY"
-      - name: Publish the release
+      - name: Create the draft release
         if: env.DRY_RUN != 'true'
         env:
           GH_TOKEN: ${{ github.token }}
         run: |
-          # A version with a pre-release part (1.2.0-beta.1) is published as a pre-release, so the download link
-          # (releases/latest) keeps pointing at the last stable one.
+          # A draft: nobody sees it until it is published on the Releases page. A version with a pre-release part
+          # (1.2.0-beta.1) is marked pre-release, so once published the download link (releases/latest) keeps
+          # pointing at the last stable one; a plain version becomes latest when published.
+          flags=(--draft --verify-tag)
           case "$VERSION" in
-            *-*) kind=--prerelease ;;
-            *) kind=--latest ;;
+            *-*) flags+=(--prerelease) ;;
           esac
-          gh release create "$TAG" dist/* --verify-tag "$kind" \
-            --title "Cinemesh $VERSION" --notes-file "$RUNNER_TEMP/notes.md"
+          url=$(gh release create "$TAG" dist/* "${flags[@]}" \
+            --title "Cinemesh $VERSION" --notes-file "$RUNNER_TEMP/notes.md")
+          echo "Draft: $url"
+          { echo; echo "**Draft release:** $url. Check it, then publish it there (Edit release, Publish release)."; } \
+            >> "$GITHUB_STEP_SUMMARY"
       - name: Dry run
         if: env.DRY_RUN == 'true'
         working-directory: dist
         run: |
-          echo "Dry run: would publish $TAG with:" && ls -la
-          { echo; echo "**Dry run:** nothing was pushed or published. Assets:"; echo; printf -- '- %s\n' *; } >> "$GITHUB_STEP_SUMMARY"
+          echo "Dry run: would draft $TAG with:" && ls -la
+          { echo; echo "**Dry run:** nothing was pushed and no release was created. Assets:"; echo; printf -- '- %s\n' *; } >> "$GITHUB_STEP_SUMMARY"

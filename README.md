@@ -98,8 +98,8 @@ npm run dist               # installers for this OS in release/<version>/
 - **Builds:** the **Build** workflow (Actions tab, Run workflow) produces the Windows installer and zip and the
   Linux AppImage. **CI** typechecks, lints and runs the unit, renderer and integration tests on Linux and the
   end-to-end tests on Windows, macOS and Linux, then builds and checks every package on all three. **Release**
-  (Actions tab, Run workflow) bumps the version, tags it, runs CI and publishes the GitHub release with every
-  package; see [Cutting a release](docs/RELEASING.md#cutting-a-release).
+  (Actions tab, Run workflow) bumps the version, tags it, runs CI and drafts the GitHub release with every package,
+  ready to check and publish; see [Cutting a release](docs/RELEASING.md#cutting-a-release).
 - `npm run fetch-mpv` downloads the official mpv builds that the Windows and macOS packages bundle. See
   [Building from source](docs/install.md#building-from-source).
 

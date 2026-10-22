@@ -1,6 +1,6 @@
 # Releasing
 
-`release.yml` publishes releases ([Cutting a release](#cutting-a-release)). Before the first public release, these
+`release.yml` builds draft releases ([Cutting a release](#cutting-a-release)). Before the first public release, these
 must be done. They are not code bugs; they are decisions, accounts or legal work that the build cannot do for itself.
 
 ## Blockers
@@ -85,20 +85,23 @@ Every build is named with its version, both in its file names and in the app (`a
      if Unreleased is empty, the tag already exists, or main moved on after the run started (main and the tag are
      pushed together or not at all; start the run again).
    - **CI** runs every suite on the tag and builds, checks and launches every package, named with the version.
-   - **publish:** the GitHub release "Cinemesh <version>" goes live with the packages, SHA256SUMS (signed when
-     `MINISIGN_SECRET_KEY` is set) and the mpv source tarball. Its notes are the changelog section and a download
-     table. A plain version becomes the **latest** release, which the app's download link (`releases/latest`)
-     points to. A version with a pre-release part is published as a pre-release, so the link stays on the last
-     stable one.
+   - **draft release:** the GitHub release "Cinemesh <version>" is created as a **draft** with the packages,
+     SHA256SUMS (signed when `MINISIGN_SECRET_KEY` is set) and the mpv source tarball. Its notes are the changelog
+     section and a download table. The run's summary links to it.
+4. Check the draft on the **Releases** page: download a package or two and try them, read the notes. Then **Edit**
+   it and **Publish release**. Only then can people see it. A plain version becomes the **latest** release, which
+   the app's download link (`releases/latest`) points to. A version with a pre-release part is marked pre-release,
+   so the link stays on the last stable one. To abandon a draft, delete it there, then delete the tag
+   (`git push origin :v<version>`) and revert the "Release" commit.
 
 Tick **Dry run** to try it first: it builds every package with the next version and shows the notes in the run's
-summary, but pushes and publishes nothing.
+summary, but pushes nothing and creates no release.
 
-If CI fails after the tag is pushed, nothing is published. Fix the cause and either re-run the failed jobs (same
+If CI fails after the tag is pushed, no release is created. Fix the cause and either re-run the failed jobs (same
 tag) or delete the tag (`git push origin :v<version>`) and revert the "Release" commit before trying again.
 
 Releasing from a terminal still works: `npm version <version> -m "Release %s"` and `git push --follow-tags` run the
-same checks, CI and publish steps from the pushed tag.
+same checks, CI and draft steps from the pushed tag.
 
 Note: the workflow pushes to main with the built-in `GITHUB_TOKEN`. If main is ever protected against direct
 pushes, allow GitHub Actions to bypass the rule, or the version step fails.
