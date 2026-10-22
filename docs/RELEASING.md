@@ -1,7 +1,7 @@
 # Releasing
 
-`release.yml` builds draft releases from `v*` tags. Before the first public release, these must be done. They are
-not code bugs; they are decisions, accounts or legal work that the build cannot do for itself.
+`release.yml` publishes releases ([Cutting a release](#cutting-a-release)). Before the first public release, these
+must be done. They are not code bugs; they are decisions, accounts or legal work that the build cannot do for itself.
 
 ## Blockers
 
@@ -82,7 +82,8 @@ Every build is named with its version, both in its file names and in the app (`a
    - **version and tag:** `npm version` bumps package.json and package-lock.json and runs
      `scripts/changelog.mjs release`, which renames Unreleased to `<version> - <date>` and opens a new empty one. It
      commits "Release <version>" to main as github-actions[bot] and tags `v<version>`. It fails, with nothing pushed,
-     if Unreleased is empty or the tag already exists.
+     if Unreleased is empty, the tag already exists, or main moved on after the run started (main and the tag are
+     pushed together or not at all; start the run again).
    - **CI** runs every suite on the tag and builds, checks and launches every package, named with the version.
    - **publish:** the GitHub release "Cinemesh <version>" goes live with the packages, SHA256SUMS (signed when
      `MINISIGN_SECRET_KEY` is set) and the mpv source tarball. Its notes are the changelog section and a download

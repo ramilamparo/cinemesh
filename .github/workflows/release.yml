@@ -74,11 +74,20 @@ jobs:
           git config user.name 'github-actions[bot]'
           git config user.email '41898282+github-actions[bot]@users.noreply.github.com'
           # Runs the `version` script (scripts/changelog.mjs release), which fails on an empty Unreleased section.
+          # An exact version must not go below package.json's (x.y.z compared numerically; pre-release parts aside).
+          node -e '
+            const [cur, next] = [require("./package.json").version, process.argv[1]].map((v) => v.split(/[-+]/)[0].split(".").map(Number))
+            if (next.length === 3 && !next.some(Number.isNaN) && next.join(".") !== cur.join(".")) {
+              const i = next.findIndex((n, k) => n !== cur[k])
+              if (next[i] < cur[i]) { console.error("::error::" + process.argv[1] + " is lower than " + cur.join(".")); process.exit(1) }
+            }
+          ' "$BUMP"
           # --allow-same-version: the first release can be the version package.json already has (0.1.0).
           npm version "$BUMP" --allow-same-version -m 'Release %s'
           if [ "$DRY_RUN" != true ]; then
-            git push origin HEAD:main
-            git push origin "v$(node -p 'require("./package.json").version')"
+            # Both refs or neither: if main moved since this run started, the push is rejected (not a fast-forward)
+            # and nothing lands, rather than a Release commit on main without its tag.
+            git push --atomic origin HEAD:refs/heads/main "refs/tags/v$(node -p 'require("./package.json").version')"
           fi
       - name: Check the tag against package.json and CHANGELOG.md (pushed tag)
         if: github.event_name == 'push'
