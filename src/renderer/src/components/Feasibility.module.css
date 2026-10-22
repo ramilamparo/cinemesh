@@ -1,0 +1,10 @@
+.feasibility {
+  margin: 0;
+  padding: 8px 10px;
+  border-radius: 8px;
+  background: var(--surface2);
+}
+
+.feasibility[data-short] {
+  border-left: 4px solid var(--tl-downloading);
+}

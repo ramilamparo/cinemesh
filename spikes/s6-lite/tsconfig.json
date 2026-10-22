@@ -1,0 +1,9 @@
+{
+  "extends": "../../tsconfig.base.json",
+  "compilerOptions": {
+    "types": ["node"],
+    "noUncheckedIndexedAccess": false,
+    "exactOptionalPropertyTypes": false
+  },
+  "include": ["*.ts", "../../src/types/**/*"]
+}

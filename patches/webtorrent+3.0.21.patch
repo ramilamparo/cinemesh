@@ -1,0 +1,36 @@
+diff --git a/node_modules/webtorrent/index.js b/node_modules/webtorrent/index.js
+index 8d3d156..9cd3f4b 100644
+--- a/node_modules/webtorrent/index.js
++++ b/node_modules/webtorrent/index.js
+@@ -115,7 +115,7 @@ export default class WebTorrent extends EventEmitter {
+       if (globalThis.WRTC && !this.tracker.wrtc) this.tracker.wrtc = globalThis.WRTC
+     }
+ 
+-    if (typeof ConnPool === 'function') {
++    if (typeof ConnPool === 'function' && opts.connPool !== false) {
+       this._connPool = new ConnPool(this)
+     } else {
+       queueMicrotask(() => {
+diff --git a/node_modules/webtorrent/lib/torrent.js b/node_modules/webtorrent/lib/torrent.js
+index 771a87f..2694f12 100644
+--- a/node_modules/webtorrent/lib/torrent.js
++++ b/node_modules/webtorrent/lib/torrent.js
+@@ -1660,8 +1660,7 @@ export default class Torrent extends EventEmitter {
+     function validateWire () {
+       if (wire.requests.length) return
+ 
+-      let i = self._selections.length
+-      while (i--) {
++      for (let i = 0; i < self._selections.length; i++) {
+         const next = self._selections.get(i)
+         let piece
+         if (self.strategy === 'rarest') {
+@@ -1680,7 +1679,7 @@ export default class Torrent extends EventEmitter {
+             tries += 1
+           }
+         } else {
+-          for (piece = next.to; piece >= next.from + next.offset; --piece) {
++          for (piece = next.from + next.offset; piece <= next.to; ++piece) {
+             if (!wire.peerPieces.get(piece)) continue
+             if (self._request(wire, piece, false)) return
+           }

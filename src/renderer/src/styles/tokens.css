@@ -1,0 +1,40 @@
+/* Mirrors src/shared/theme-tokens.ts (a unit test keeps them equal). nativeTheme.themeSource in main
+   decides which block applies by driving prefers-color-scheme. */
+
+:root {
+  color-scheme: light;
+  --bg: #ffffff;
+  --surface: #f4f5f7;
+  --surface2: #e9ebef;
+  --text: #16181d;
+  --muted: #5b6270;
+  --border: #d6d9df;
+  --accent: #3b6cf6;
+  --tl-missing: #d9dce2;
+  --tl-downloading: #e0a21b;
+  --tl-downloaded: #3b6cf6;
+  --tl-buffered: #8fa8f8;
+  --playhead: #16181d;
+  --danger: #d93036;
+  --ok: #2b9a66;
+}
+
+@media (prefers-color-scheme: dark) {
+  :root {
+    color-scheme: dark;
+    --bg: #121317;
+    --surface: #1b1d23;
+    --surface2: #252832;
+    --text: #e8eaf0;
+    --muted: #9aa1ae;
+    --border: #2f333d;
+    --accent: #6c8cff;
+    --tl-missing: #2a2e38;
+    --tl-downloading: #d99a1e;
+    --tl-downloaded: #6c8cff;
+    --tl-buffered: #3d4f99;
+    --playhead: #ffffff;
+    --danger: #e5484d;
+    --ok: #30a46c;
+  }
+}

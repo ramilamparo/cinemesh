@@ -1,0 +1,17 @@
+.options {
+  display: flex;
+  flex-direction: column;
+  gap: 12px;
+}
+
+.option {
+  display: grid;
+  grid-template-columns: 170px 1fr;
+  gap: 12px;
+  align-items: center;
+}
+
+.option p {
+  margin: 0;
+  font-size: 13px;
+}

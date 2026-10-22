@@ -1,0 +1,247 @@
+{
+  "label": "rl-strict-1",
+  "failure": null,
+  "mesh": {
+    "ms": 7889,
+    "events": [
+      "0.96s v2: ctrl-open host live=2 swarmConns=2",
+      "0.96s v1: ctrl-open host live=3 swarmConns=3",
+      "0.96s v3: ctrl-open host live=2 swarmConns=2",
+      "0.96s host: ctrl-open v2 live=3 swarmConns=3",
+      "0.96s host: ctrl-open v3 live=3 swarmConns=3",
+      "0.96s v2: ctrl-open v1 live=2 swarmConns=2",
+      "0.96s host: ctrl-open v1 live=3 swarmConns=3",
+      "0.96s v1: ctrl-open v2 live=3 swarmConns=3",
+      "0.96s v1: ctrl-open v3 live=3 swarmConns=3",
+      "0.96s v3: ctrl-open v1 live=2 swarmConns=2",
+      "8.27s v2: ctrl-open v3 live=3 swarmConns=3",
+      "8.27s v3: ctrl-open v2 live=3 swarmConns=3",
+      "62.09s v3: close v2 live=2 swarmConns=2",
+      "62.09s v2: close v3 live=2 swarmConns=2",
+      "62.09s host: close v3 live=2 swarmConns=2",
+      "62.09s host: close v2 live=1 swarmConns=1",
+      "62.09s host: close v1 live=0 swarmConns=0",
+      "62.09s v3: close host live=1 swarmConns=1",
+      "62.09s v3: close v1 live=0 swarmConns=0",
+      "62.09s v1: close v3 live=2 swarmConns=2",
+      "62.09s v1: close v2 live=1 swarmConns=1",
+      "62.09s v2: close host live=1 swarmConns=1",
+      "62.09s v2: close v1 live=0 swarmConns=0",
+      "62.09s v1: close host live=0 swarmConns=0"
+    ]
+  },
+  "config": {
+    "upLimit": null,
+    "downLimit": null,
+    "mesh": "ordered",
+    "viewers": 3,
+    "reqq": null,
+    "bp": "strict",
+    "relay": true,
+    "oneProcess": false,
+    "reattach": null,
+    "maxMs": 70000,
+    "idleMs": 6000,
+    "netem": "qdisc noqueue 0: root refcnt 2"
+  },
+  "env": {
+    "cpus": 14,
+    "loadavgBefore": [
+      4.81,
+      3.65,
+      3.06
+    ],
+    "loadavgAfter": [
+      5.79,
+      4.04,
+      3.22
+    ],
+    "node": "v26.6.0"
+  },
+  "source": {
+    "sizeBefore": 2147495993,
+    "sizeAfter": 2147495993,
+    "mtimeBefore": 1792356631195.685,
+    "mtimeAfter": 1792356631195.685,
+    "unchanged": true
+  },
+  "relay": {
+    "stats": {
+      "sessions": {
+        "accepted": 12,
+        "opened": 12,
+        "closed": 12,
+        "active": 0
+      },
+      "pairings": {
+        "requested": 12,
+        "matched": 6,
+        "cancelled": 0,
+        "pending": 0,
+        "active": 0
+      },
+      "streams": {
+        "opened": 12,
+        "closed": 12,
+        "errors": 6,
+        "active": 0
+      },
+      "cpuPctTransfer": 66,
+      "rssPeakMB": 132
+    },
+    "droppedDirectPackets": 10
+  },
+  "reportsReceived": [
+    "v2",
+    "v1",
+    "v3",
+    "host"
+  ],
+  "throughput": {
+    "perViewer": [
+      {
+        "name": "v2",
+        "done": true,
+        "seconds": 47.6,
+        "MBps": 45.1,
+        "fromHostMB": 1780.1,
+        "fromViewersMB": 367.4
+      },
+      {
+        "name": "v1",
+        "done": true,
+        "seconds": 47.4,
+        "MBps": 45.3,
+        "fromHostMB": 1681.9,
+        "fromViewersMB": 465.6
+      },
+      {
+        "name": "v3",
+        "done": true,
+        "seconds": 47.3,
+        "MBps": 45.4,
+        "fromHostMB": 1896.8,
+        "fromViewersMB": 250.7
+      }
+    ],
+    "viewerMedianMBps": 45.3,
+    "viewerMinMBps": 45.1,
+    "aggregateViewerMBps": 135,
+    "hostUploadMBps": 112.4,
+    "hostUploadedMB": 5363,
+    "dupFactorNoStriping": 2.5
+  },
+  "latency": {
+    "ctrl": {
+      "idleP50": 0.66,
+      "idleP95": 1.14,
+      "satP50": 15.05,
+      "satP95": 45.6,
+      "extraP50": 14.41,
+      "extraP95": 44.98,
+      "extraMax": 193.7,
+      "samples": 1381
+    },
+    "dgramIdle": {
+      "sent": 147,
+      "lossPct": 0,
+      "p50": 0.56,
+      "p95": 1.11,
+      "max": 1.6
+    },
+    "dgramSat": {
+      "sent": 1371,
+      "lossPct": 0,
+      "p50": 6.62,
+      "p95": 11.15,
+      "max": 20.8
+    }
+  },
+  "perProcess": [
+    {
+      "members": "v2",
+      "rssBaseMB": 145,
+      "rssPeakMB": 283.8,
+      "rssGrowthMB": 138.8,
+      "arrayBuffersPeakMB": 100.1,
+      "heapPeakMB": 44.6,
+      "cpuPct": 97.3,
+      "eluPct": 71.6,
+      "eldIdleP99": 6.7,
+      "eldP50": 5.08,
+      "eldP99": 7.86,
+      "eldMax": 16.2
+    },
+    {
+      "members": "v1",
+      "rssBaseMB": 145.1,
+      "rssPeakMB": 273.8,
+      "rssGrowthMB": 128.7,
+      "arrayBuffersPeakMB": 89.1,
+      "heapPeakMB": 47.3,
+      "cpuPct": 91.6,
+      "eluPct": 67.8,
+      "eldIdleP99": 6.61,
+      "eldP50": 5.11,
+      "eldP99": 7.7,
+      "eldMax": 12.9
+    },
+    {
+      "members": "v3",
+      "rssBaseMB": 143.9,
+      "rssPeakMB": 282.2,
+      "rssGrowthMB": 138.3,
+      "arrayBuffersPeakMB": 108.4,
+      "heapPeakMB": 45.4,
+      "cpuPct": 89.2,
+      "eluPct": 65.1,
+      "eldIdleP99": 6.64,
+      "eldP50": 5.1,
+      "eldP99": 7.83,
+      "eldMax": 12.2
+    },
+    {
+      "members": "host",
+      "rssBaseMB": 136.9,
+      "rssPeakMB": 312.3,
+      "rssGrowthMB": 175.4,
+      "arrayBuffersPeakMB": 175.8,
+      "heapPeakMB": 27.9,
+      "cpuPct": 102.9,
+      "eluPct": 77.4,
+      "eldIdleP99": 6.6,
+      "eldP50": 5.03,
+      "eldP99": 7.28,
+      "eldMax": 11.8
+    }
+  ],
+  "handshake": {
+    "lanes": 12,
+    "lanesWithWire": 12,
+    "connOpenedMsMax": 0.55,
+    "chOpenedMsP50": 2.69,
+    "chOpenedMsMax": 3.88,
+    "wireMsP50": 7.46,
+    "wireMsMax": 11.75
+  },
+  "reattach": null,
+  "paths": [
+    "v2->host:relayed",
+    "v2->v1:relayed",
+    "v2->v3:relayed",
+    "v1->host:relayed",
+    "v1->v3:relayed",
+    "v1->v2:relayed",
+    "v3->host:relayed",
+    "v3->v1:relayed",
+    "v3->v2:relayed",
+    "host->v1:relayed",
+    "host->v2:relayed",
+    "host->v3:relayed"
+  ],
+  "storeStats": {
+    "gets": 4639,
+    "bytes": 4863307833,
+    "puts": 0
+  }
+}

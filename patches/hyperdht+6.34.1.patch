@@ -1,0 +1,16 @@
+diff --git a/node_modules/hyperdht/lib/connect.js b/node_modules/hyperdht/lib/connect.js
+index 8a3f0db..15c704b 100644
+--- a/node_modules/hyperdht/lib/connect.js
++++ b/node_modules/hyperdht/lib/connect.js
+@@ -570,6 +570,11 @@ async function updateHolepunch(c, peerAddress, relayAddr, payload) {
+   const { error, firewall, punching, addresses, remoteToken } = remotePayload
+ 
+   if (error === ERROR.TRY_LATER && c.relayToken && payload.punching) {
++    // watch-together: keep this round's address verification. The delayed round sends no token, and _punch()
++    // refuses a RANDOM remote without a verified address, so a relayed link never upgraded (ADR 0005 Finding 9).
++    if (remoteToken && payload.token && b4a.equals(remoteToken, payload.token)) {
++      c.puncher.updateRemote({ punching, firewall, addresses, verified: peerAddress.host })
++    }
+     return {
+       tryLater: true,
+       ...holepunch,

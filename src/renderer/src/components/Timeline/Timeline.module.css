@@ -1,0 +1,66 @@
+.timeline {
+  display: flex;
+  flex-direction: column;
+  gap: 6px;
+}
+
+.track {
+  position: relative;
+  height: 44px;
+  border-radius: 6px;
+  touch-action: none;
+}
+
+.track[data-seekable] {
+  cursor: pointer;
+}
+
+.canvas {
+  display: block;
+  width: 100%;
+}
+
+.legend {
+  display: flex;
+  flex-wrap: wrap;
+  gap: 4px 14px;
+  font-size: 12px;
+  color: var(--muted);
+  align-items: center;
+}
+
+.legend i {
+  display: inline-block;
+  width: 14px;
+  height: 10px;
+  border-radius: 2px;
+  vertical-align: -1px;
+  border: 1px solid var(--border);
+}
+
+.swDownloaded {
+  background: var(--tl-downloaded);
+}
+
+.swDownloading {
+  background: repeating-linear-gradient(
+    135deg,
+    var(--tl-downloading) 0 3px,
+    color-mix(in srgb, var(--tl-downloading) 50%, var(--bg)) 3px 5px
+  );
+}
+
+.swMissing {
+  background: var(--tl-missing);
+}
+
+.swBuffered {
+  background: var(--tl-buffered);
+  height: 4px !important;
+}
+
+.times {
+  margin-left: auto;
+  font-variant-numeric: tabular-nums;
+  color: var(--text);
+}

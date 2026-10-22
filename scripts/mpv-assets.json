@@ -1,0 +1,65 @@
+{
+  "$comment": [
+    "Pinned mpv builds bundled into the Windows and macOS packages (plan §4.4 Binaries); read by scripts/fetch-mpv.mjs.",
+    "All three are mpv-player's own first-party GitHub CI builds, attached to the upstream v0.41.0 release: mpv-player",
+    "publishes an official build for every platform we bundle, so no third-party build is used. mpv.io/installation",
+    "describes these CI builds as 'intended mainly for testing and may be missing certain features'.",
+    "sha256 was computed from a download on 2026-10-19 and matches the digest GitHub reports for each asset.",
+    "Linux is not listed on purpose: deb/rpm/AppImage/pacman use the system mpv (>= 0.39) or Flatpak io.mpv.Mpv.",
+    "To update: change version/url/sha256/size, run `node scripts/fetch-mpv.mjs --platform all --force`, and update",
+    "resources/licenses/mpv/SOURCE-OFFER.md."
+  ],
+  "version": "0.41.0",
+  "source": {
+    "tag": "v0.41.0",
+    "commit": "41f6a645068483470267271e1d09966ca3b9f413",
+    "url": "https://github.com/mpv-player/mpv/archive/refs/tags/v0.41.0.tar.gz",
+    "file": "mpv-0.41.0.tar.gz",
+    "sha256": "ee21092a5ee427353392360929dc64645c54479aefdb5babc5cfbb5fad626209",
+    "size": 7262018
+  },
+  "platforms": {
+    "win-x64": {
+      "official": true,
+      "publisher": "mpv-player: first-party GitHub CI build attached to the v0.41.0 release",
+      "url": "https://github.com/mpv-player/mpv/releases/download/v0.41.0/mpv-v0.41.0-x86_64-pc-windows-msvc.zip",
+      "sha256": "4e197f729f5071c6772f35fffd96e0f36e3e8a044bd9479b136bb09b7c6a80ff",
+      "size": 77205127,
+      "format": "zip",
+      "include": ["mpv.exe", "mpv.com", "vulkan-1.dll"],
+      "binary": "mpv.exe",
+      "cpu": "x64",
+      "minOs": "Windows 10 (static CRT; imports only system DLLs and the bundled vulkan-1.dll)",
+      "build": "mpv .github/workflows/build.yml job 'win32' (target x86_64-pc-windows-msvc), ci/build-win32.ps1, at the v0.41.0 commit",
+      "notes": "Chosen over mpv-v0.41.0-x86_64-w64-mingw32.zip: one static mpv.exe (FFmpeg 8.0 release branch, LuaJIT, libplacebo, d3d11, Vulkan) instead of 25 DLLs from git master. mpv.pdb (229 MB of debug symbols) and the mpv-register/unregister scripts are not extracted."
+    },
+    "mac-arm64": {
+      "official": true,
+      "publisher": "mpv-player: first-party GitHub CI build attached to the v0.41.0 release",
+      "url": "https://github.com/mpv-player/mpv/releases/download/v0.41.0/mpv-v0.41.0-macos-14-arm.zip",
+      "sha256": "5c96f9b21355fc0a11d2e2161ad65f33031070e9fb3f6bd9865fb459b94587e6",
+      "size": 43693888,
+      "format": "zip+tar.gz",
+      "inner": "mpv.tar.gz",
+      "binary": "mpv.app/Contents/MacOS/mpv",
+      "cpu": "arm64",
+      "minOs": "macOS 14.0 (LC_BUILD_VERSION minos of mpv and its dylibs)",
+      "build": "mpv .github/workflows/build.yml job 'macos' (runner macos-14, arm), ci/build-macos.sh + meson target macos-bundle, Homebrew dependencies",
+      "notes": "Chosen over the macos-15-arm and macos-26-arm builds because it runs on the oldest macOS. The zip wraps a tarball (mpv.tar.gz) that holds mpv.app. The .gitkeep placeholders and AppleDouble (._*) files are dropped; electron-builder re-signs the bundle ad hoc."
+    },
+    "mac-x64": {
+      "official": true,
+      "publisher": "mpv-player: first-party GitHub CI build attached to the v0.41.0 release",
+      "url": "https://github.com/mpv-player/mpv/releases/download/v0.41.0/mpv-v0.41.0-macos-15-intel.zip",
+      "sha256": "41003617ab4f7784394b5ddea7ce51b3e0838e8cfc8166ad1a378b2eda3b583c",
+      "size": 49288843,
+      "format": "zip+tar.gz",
+      "inner": "mpv.tar.gz",
+      "binary": "mpv.app/Contents/MacOS/mpv",
+      "cpu": "x64",
+      "minOs": "macOS 15.0 (mpv and 7 bundled dylibs are built for 15.0)",
+      "build": "mpv .github/workflows/build.yml job 'macos' (runner macos-15-intel), ci/build-macos.sh + meson target macos-bundle, Homebrew dependencies",
+      "notes": "The only Intel build mpv-player publishes. Same archive layout as mac-arm64."
+    }
+  }
+}

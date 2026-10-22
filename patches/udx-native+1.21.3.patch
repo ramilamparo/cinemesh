@@ -1,0 +1,34 @@
+diff --git a/node_modules/udx-native/lib/stream.js b/node_modules/udx-native/lib/stream.js
+index 0da42f7..6c0665e 100644
+--- a/node_modules/udx-native/lib/stream.js
++++ b/node_modules/udx-native/lib/stream.js
+@@ -58,6 +58,11 @@ module.exports = class UDXStream extends streamx.Duplex {
+ 
+     this.userData = null
+ 
++    // watch-together: bytes handed to _writev, and bytes of write requests acknowledged in full. The stream exposes
++    // inflight but not its send queue: unsent = bytesWritten - bytesAcked - inflight (the host's upload scheduler)
++    this.bytesWritten = 0
++    this.bytesAcked = 0
++
+     binding.udx_napi_stream_init(
+       this.udx._handle,
+       this._handle,
+@@ -346,6 +351,8 @@ module.exports = class UDXStream extends streamx.Duplex {
+ 
+     let drained = true
+ 
++    for (let i = 0; i < buffers.length; i++) this.bytesWritten += buffers[i].byteLength
++
+     if (buffers.length === 1) {
+       const id = this._allocWrite(1)
+       const req = this._wreqs[id]
+@@ -422,6 +429,8 @@ module.exports = class UDXStream extends streamx.Duplex {
+   _onack(id) {
+     const req = this._wreqs[id]
+ 
++    if (req.buffer !== null) this.bytesAcked += req.buffer.byteLength
++    if (req.buffers !== null) for (let i = 0; i < req.buffers.length; i++) this.bytesAcked += req.buffers[i].byteLength
+     req.buffers = req.buffer = null
+     this._wfree.push(id)
+ 

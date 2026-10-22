@@ -1,0 +1,81 @@
+{
+  "label": "re-repfix-2",
+  "failure": "timeout waiting for full mesh of ctrl lanes",
+  "mesh": {
+    "ms": null,
+    "events": [
+      "13.41s v3: close 8a88e3dd live=0 swarmConns=1",
+      "13.42s v1: close 8a88e3dd live=0 swarmConns=0",
+      "13.43s v2: close 8139770e live=0 swarmConns=2",
+      "13.43s v2: close ca93ac17 live=0 swarmConns=1",
+      "13.43s v2: close 8a88e3dd live=0 swarmConns=0",
+      "15.16s host: ctrl-open v1 live=1 swarmConns=1",
+      "15.16s v1: ctrl-open host live=1 swarmConns=1",
+      "15.21s host: ctrl-open v2 live=2 swarmConns=2",
+      "15.21s v2: ctrl-open host live=1 swarmConns=3",
+      "15.31s host: ctrl-open v3 live=3 swarmConns=3",
+      "15.31s v3: ctrl-open host live=1 swarmConns=2",
+      "20.77s v3: close 8139770e live=1 swarmConns=1",
+      "26.21s v3: ctrl-open v1 live=2 swarmConns=2",
+      "26.21s v1: ctrl-open v3 live=2 swarmConns=2",
+      "28.16s v2: close ca93ac17 live=1 swarmConns=2",
+      "28.16s v2: close 8139770e live=1 swarmConns=1",
+      "35.60s v2: ctrl-open v3 live=2 swarmConns=3",
+      "35.60s v3: ctrl-open v2 live=3 swarmConns=3",
+      "48.55s v2: close 8139770e live=2 swarmConns=2",
+      "60.45s host: close v1 live=2 swarmConns=2",
+      "60.45s host: close v2 live=1 swarmConns=1",
+      "60.45s v1: close host live=1 swarmConns=1",
+      "60.45s v1: close v3 live=0 swarmConns=0",
+      "60.45s v3: close v1 live=2 swarmConns=2",
+      "60.45s v3: close v2 live=1 swarmConns=1",
+      "60.45s v3: close host live=0 swarmConns=0",
+      "60.45s v2: close host live=1 swarmConns=1",
+      "60.45s v2: close v3 live=0 swarmConns=0",
+      "60.45s host: close v3 live=0 swarmConns=0"
+    ]
+  },
+  "config": {
+    "upLimit": null,
+    "downLimit": null,
+    "mesh": "ordered",
+    "viewers": 3,
+    "reqq": null,
+    "bp": "fixed",
+    "relay": false,
+    "oneProcess": false,
+    "reattach": "5000",
+    "maxMs": 40000,
+    "idleMs": 6000,
+    "netem": "qdisc noqueue 0: root refcnt 2"
+  },
+  "env": {
+    "cpus": 14,
+    "loadavgBefore": [
+      4.32,
+      2.56,
+      2.01
+    ],
+    "loadavgAfter": [
+      1.81,
+      2.16,
+      1.9
+    ],
+    "node": "v26.6.0"
+  },
+  "source": {
+    "sizeBefore": 2147495993,
+    "sizeAfter": 2147495993,
+    "mtimeBefore": 1792356631195.685,
+    "mtimeAfter": 1792356631195.685,
+    "unchanged": true
+  },
+  "relay": null,
+  "reportsReceived": [
+    "v2",
+    "v3",
+    "v1",
+    "host"
+  ],
+  "error": "missing reports"
+}

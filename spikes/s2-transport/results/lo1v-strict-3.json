@@ -1,0 +1,146 @@
+{
+  "label": "lo1v-strict-3",
+  "failure": null,
+  "mesh": {
+    "ms": 101,
+    "events": [
+      "0.43s host: ctrl-open v1 live=1 swarmConns=1",
+      "0.43s v1: ctrl-open host live=1 swarmConns=1",
+      "23.36s host: close v1 live=0 swarmConns=0",
+      "23.36s v1: close host live=0 swarmConns=0"
+    ]
+  },
+  "config": {
+    "upLimit": null,
+    "downLimit": null,
+    "mesh": "ordered",
+    "viewers": 1,
+    "reqq": null,
+    "bp": "strict",
+    "relay": false,
+    "oneProcess": false,
+    "reattach": null,
+    "maxMs": 40000,
+    "idleMs": 6000,
+    "netem": "qdisc noqueue 0: root refcnt 2"
+  },
+  "env": {
+    "cpus": 14,
+    "loadavgBefore": [
+      2.53,
+      3.04,
+      2.81
+    ],
+    "loadavgAfter": [
+      2.58,
+      3.01,
+      2.8
+    ],
+    "node": "v26.6.0"
+  },
+  "source": {
+    "sizeBefore": 2147495993,
+    "sizeAfter": 2147495993,
+    "mtimeBefore": 1792356631195.685,
+    "mtimeAfter": 1792356631195.685,
+    "unchanged": true
+  },
+  "relay": null,
+  "reportsReceived": [
+    "host",
+    "v1"
+  ],
+  "throughput": {
+    "perViewer": [
+      {
+        "name": "v1",
+        "done": true,
+        "seconds": 16.7,
+        "MBps": 128.5,
+        "fromHostMB": 2147.5,
+        "fromViewersMB": 0
+      }
+    ],
+    "viewerMedianMBps": 128.5,
+    "viewerMinMBps": 128.5,
+    "aggregateViewerMBps": 127.4,
+    "hostUploadMBps": 127.5,
+    "hostUploadedMB": 2149.2,
+    "dupFactorNoStriping": 1
+  },
+  "latency": {
+    "ctrl": {
+      "idleP50": 0.52,
+      "idleP95": 0.64,
+      "satP50": 7.84,
+      "satP95": 66.62,
+      "extraP50": 7.32,
+      "extraP95": 66.11,
+      "extraMax": 98.2,
+      "samples": 153
+    },
+    "dgramIdle": {
+      "sent": 50,
+      "lossPct": 0,
+      "p50": 0.45,
+      "p95": 0.57,
+      "max": 1
+    },
+    "dgramSat": {
+      "sent": 148,
+      "lossPct": 0,
+      "p50": 5.38,
+      "p95": 11.45,
+      "max": 23.7
+    }
+  },
+  "perProcess": [
+    {
+      "members": "host",
+      "rssBaseMB": 133.9,
+      "rssPeakMB": 327.3,
+      "rssGrowthMB": 193.4,
+      "arrayBuffersPeakMB": 186.1,
+      "heapPeakMB": 27.1,
+      "cpuPct": 94.7,
+      "eluPct": 77.5,
+      "eldIdleP99": 6.26,
+      "eldP50": 5.03,
+      "eldP99": 7.02,
+      "eldMax": 10.4
+    },
+    {
+      "members": "v1",
+      "rssBaseMB": 142.1,
+      "rssPeakMB": 237.2,
+      "rssGrowthMB": 95.2,
+      "arrayBuffersPeakMB": 73.8,
+      "heapPeakMB": 33.1,
+      "cpuPct": 125,
+      "eluPct": 97.2,
+      "eldIdleP99": 6.29,
+      "eldP50": 5.01,
+      "eldP99": 9.44,
+      "eldMax": 22.1
+    }
+  ],
+  "handshake": {
+    "lanes": 2,
+    "lanesWithWire": 2,
+    "connOpenedMsMax": 1.1,
+    "chOpenedMsP50": 0.21,
+    "chOpenedMsMax": 1.15,
+    "wireMsP50": 6.76,
+    "wireMsMax": 9.82
+  },
+  "reattach": null,
+  "paths": [
+    "host->v1:direct",
+    "v1->host:direct"
+  ],
+  "storeStats": {
+    "gets": 2049,
+    "bytes": 2147495993,
+    "puts": 0
+  }
+}

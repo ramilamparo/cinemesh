@@ -1,0 +1,82 @@
+{
+  "label": "lo-strict-3",
+  "failure": "timeout waiting for full mesh of ctrl lanes",
+  "mesh": {
+    "ms": null,
+    "events": [
+      "0.59s host: ctrl-open v2 live=1 swarmConns=1",
+      "0.59s v2: ctrl-open host live=1 swarmConns=1",
+      "8.02s v2: ctrl-open v3 live=3 swarmConns=3",
+      "8.02s v1: ctrl-open v2 live=1 swarmConns=2",
+      "8.02s v3: ctrl-open v2 live=1 swarmConns=2",
+      "8.02s v2: ctrl-open v1 live=3 swarmConns=3",
+      "13.54s v3: close 8a88e3dd live=1 swarmConns=2",
+      "13.55s v1: close 8a88e3dd live=1 swarmConns=1",
+      "13.59s v3: ctrl-open 8a88e3dd live=1 swarmConns=2",
+      "13.60s v1: ctrl-open 8a88e3dd live=1 swarmConns=1",
+      "15.58s v3: ctrl-open host live=2 swarmConns=3",
+      "15.58s host: ctrl-open v3 live=2 swarmConns=2",
+      "21.25s v3: close 8139770e live=2 swarmConns=2",
+      "21.30s v3: ctrl-open 8139770e live=2 swarmConns=2",
+      "27.57s v3: ctrl-open v1 live=3 swarmConns=3",
+      "27.57s v1: ctrl-open v3 live=2 swarmConns=3",
+      "27.98s v1: close 8a88e3dd live=2 swarmConns=2",
+      "28.03s v1: ctrl-open 8a88e3dd live=2 swarmConns=2",
+      "48.17s v1: close 8a88e3dd live=2 swarmConns=2",
+      "48.22s v1: ctrl-open 8a88e3dd live=2 swarmConns=2",
+      "60.58s host: close v3 live=1 swarmConns=1",
+      "60.58s host: close v2 live=0 swarmConns=0",
+      "60.58s v3: close v2 live=2 swarmConns=2",
+      "60.58s v3: close host live=1 swarmConns=1",
+      "60.58s v3: close v1 live=0 swarmConns=0",
+      "60.58s v1: close v3 live=1 swarmConns=1",
+      "60.58s v1: close v2 live=0 swarmConns=0",
+      "60.58s v2: close v3 live=2 swarmConns=2",
+      "60.58s v2: close host live=1 swarmConns=1",
+      "60.58s v2: close v1 live=0 swarmConns=0"
+    ]
+  },
+  "config": {
+    "upLimit": null,
+    "downLimit": null,
+    "mesh": "ordered",
+    "viewers": 3,
+    "reqq": null,
+    "bp": "strict",
+    "relay": false,
+    "oneProcess": false,
+    "reattach": null,
+    "maxMs": 60000,
+    "idleMs": 6000,
+    "netem": "qdisc noqueue 0: root refcnt 2"
+  },
+  "env": {
+    "cpus": 14,
+    "loadavgBefore": [
+      5.35,
+      3.41,
+      2.6
+    ],
+    "loadavgAfter": [
+      2.52,
+      2.98,
+      2.5
+    ],
+    "node": "v26.6.0"
+  },
+  "source": {
+    "sizeBefore": 2147495993,
+    "sizeAfter": 2147495993,
+    "mtimeBefore": 1792356631195.685,
+    "mtimeAfter": 1792356631195.685,
+    "unchanged": true
+  },
+  "relay": null,
+  "reportsReceived": [
+    "v2",
+    "v3",
+    "v1",
+    "host"
+  ],
+  "error": "missing reports"
+}

@@ -1,0 +1,7 @@
+out/
+release/
+vendor/
+patches/
+package-lock.json
+spikes/**/data/
+resources/licenses/THIRD-PARTY.md

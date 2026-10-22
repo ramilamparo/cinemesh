@@ -1,0 +1,79 @@
+{
+  "name": "watch-together-p2p",
+  "productName": "Watch Together",
+  "version": "0.1.0",
+  "private": true,
+  "description": "Watch a local video in sync with friends; the file is shared peer-to-peer",
+  "license": "MIT",
+  "type": "module",
+  "main": "./out/main/index.js",
+  "workspaces": [
+    "packages/*"
+  ],
+  "engines": {
+    "node": ">=24"
+  },
+  "scripts": {
+    "dev": "electron-vite dev",
+    "build": "electron-vite build",
+    "start": "electron-vite preview",
+    "typecheck": "tsc -p tsconfig.node.json && tsc -p tsconfig.web.json",
+    "lint": "eslint .",
+    "format": "prettier --write .",
+    "test": "scripts/isolated.sh vitest run --project unit --project renderer",
+    "test:integration": "scripts/isolated.sh vitest run --project integration",
+    "test:e2e": "npm run build && scripts/isolated.sh playwright test",
+    "fetch-mpv": "node scripts/fetch-mpv.mjs",
+    "icons": "node scripts/make-icons.mjs",
+    "licenses": "node scripts/third-party-licenses.mjs",
+    "dist": "npm run fetch-mpv && npm run build && electron-builder --publish never",
+    "dist:linux": "npm run build && electron-builder --linux --publish never",
+    "check:package": "node scripts/check-package.mjs",
+    "postinstall": "patch-package",
+    "test:alpha": "WT_ALPHA=1 scripts/isolated.sh vitest run --project alpha",
+    "isolated": "scripts/isolated.sh"
+  },
+  "dependencies": {
+    "b4a": "^1.9.0",
+    "bencode": "^4.0.1",
+    "compact-encoding": "^3.5.2",
+    "electron-log": "^5.4.4",
+    "hyperdht": "6.34.1",
+    "hyperswarm": "4.17.2",
+    "mp4box": "2.4.1",
+    "protomux": "3.13.0",
+    "sodium-native": "5.2.0",
+    "streamx": "^2.28.1",
+    "webtorrent": "3.0.21",
+    "z32": "^1.1.0",
+    "zod": "^4.6.7"
+  },
+  "devDependencies": {
+    "@eslint/js": "^10.0.1",
+    "@playwright/test": "^1.64.1",
+    "@types/node": "^24.0.0",
+    "@types/react": "^19.3.0",
+    "@types/react-dom": "^19.3.0",
+    "@vitejs/plugin-react": "^6.1.2",
+    "electron": "44.9.0",
+    "electron-builder": "26.17.0",
+    "electron-vite": "6.0.0",
+    "eslint": "^10.13.0",
+    "eslint-plugin-react-hooks": "^7.1.1",
+    "happy-dom": "^21.0.3",
+    "patch-package": "^8.0.1",
+    "prettier": "^3.9.10",
+    "react": "^19.3.1",
+    "react-dom": "^19.3.1",
+    "tsx": "^4.23.15",
+    "typescript": "6.0.3",
+    "typescript-eslint": "^8.71.2",
+    "vite": "^8.3.4",
+    "vitest": "^5.0.5",
+    "zustand": "^5.0.15"
+  },
+  "overrides": {
+    "webrtc-polyfill": "file:./stubs/webrtc-polyfill",
+    "utp-native": "file:./stubs/utp-native"
+  }
+}

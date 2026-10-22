@@ -1,0 +1,253 @@
+# CI (plan §4.6 "CI", §8 M9). Jobs:
+#   check        typecheck, lint, unit + renderer tests, patches apply, third-party notices current
+#   integration  Arch Linux container with its mpv (0.41) and ffmpeg: testnet, real mpv, the forced-relay test
+#   mpv-compat   the mpv argument list against real 0.39 and 0.40 builds (pinned nixpkgs releases)
+#   e2e          Playwright + Electron with the fake player on Ubuntu (Xvfb), Windows and macOS
+#   package      every installer, with the bundled mpv on Windows/macOS; scripts/check-package.mjs checks each
+#                package (addons unpacked, fuses, ldd, .desktop, codesign) and launches it with --selftest
+# release.yml runs this whole workflow for v* tags (workflow_call) and publishes the package job's artifacts.
+name: CI
+
+on:
+  push:
+    branches: [main]
+  pull_request:
+  workflow_dispatch:
+  workflow_call:
+
+permissions:
+  contents: read
+
+concurrency:
+  group: ci-${{ github.workflow }}-${{ github.ref }}
+  cancel-in-progress: ${{ github.event_name == 'pull_request' }}
+
+env:
+  # Electron 44 runs the core on Node 24 (24.22), so the plain-Node jobs use the same major.
+  NODE_VERSION: '24'
+  FORCE_COLOR: '1'
+
+jobs:
+  check:
+    name: check
+    runs-on: ubuntu-24.04
+    timeout-minutes: 20
+    steps:
+      - uses: actions/checkout@v7
+      - uses: actions/setup-node@v7
+        with:
+          node-version: ${{ env.NODE_VERSION }}
+          cache: npm
+      # postinstall runs patch-package. Under CI it exits 1 when a patch no longer applies, which fails npm ci.
+      - run: npm ci
+      # The same check made explicit, so it does not depend on patch-package detecting CI. Idempotent.
+      - name: Patches apply
+        run: npx patch-package --error-on-fail
+      - run: npm run typecheck
+      - run: npm run lint
+      - name: Unit and renderer tests
+        run: npm test
+      - name: Third-party notices match node_modules
+        run: node scripts/third-party-licenses.mjs --check
+
+  integration:
+    name: integration (Arch, mpv)
+    runs-on: ubuntu-24.04
+    timeout-minutes: 30
+    container:
+      image: archlinux:latest
+      # The forced-relay test needs `unshare -rn` and nft (test/integration/net/relay.test.ts skips without them).
+      options: --privileged
+    steps:
+      - name: Install mpv, ffmpeg, nftables and git
+        run: |
+          pacman -Sy --noconfirm --needed archlinux-keyring
+          pacman -Su --noconfirm --needed git mpv ffmpeg nftables
+      - uses: actions/checkout@v7
+      - uses: actions/setup-node@v7
+        with:
+          node-version: ${{ env.NODE_VERSION }}
+          cache: npm
+      - run: npm ci
+        env:
+          ELECTRON_SKIP_BINARY_DOWNLOAD: '1'
+      - name: Versions
+        # sed reads to the end (head would close the pipe early, and bash runs with pipefail)
+        run: |
+          mpv --version | sed -n 1p
+          ffmpeg -hide_banner -version | sed -n 1p
+      - run: npm run test:integration
+
+  mpv-compat:
+    name: mpv ${{ matrix.mpv }} argument list
+    runs-on: ubuntu-24.04
+    timeout-minutes: 20
+    strategy:
+      fail-fast: false
+      matrix:
+        include:
+          # Frozen NixOS releases whose mpv is exactly this minor version.
+          - mpv: '0.39'
+            nixpkgs: nixos-24.11
+          - mpv: '0.40'
+            nixpkgs: nixos-25.05
+    steps:
+      - uses: actions/checkout@v7
+      - uses: actions/setup-node@v7
+        with:
+          node-version: ${{ env.NODE_VERSION }}
+          cache: npm
+      - run: npm ci
+        env:
+          ELECTRON_SKIP_BINARY_DOWNLOAD: '1'
+      - uses: cachix/install-nix-action@v31
+      - name: Host and viewer argument lists exit 0 on mpv ${{ matrix.mpv }}
+        env:
+          MPV_MINOR: ${{ matrix.mpv }}
+          NIXPKGS: ${{ matrix.nixpkgs }}
+        run: |
+          nix shell "github:NixOS/nixpkgs/$NIXPKGS#mpv" --command mpv --version | sed -n 1p | tee "$RUNNER_TEMP/mpv-version"
+          # 0.39 tarball builds print 'mpv 0.39.0', later ones 'mpv v0.40.0' (same rule as src/core/player/mpv-version.ts)
+          grep -Eq "^mpv v?${MPV_MINOR}\." "$RUNNER_TEMP/mpv-version"
+          nix shell "github:NixOS/nixpkgs/$NIXPKGS#mpv" --command \
+            npx vitest run --project integration test/integration/player/mpv-ipc.test.ts -t argv
+
+  e2e:
+    name: e2e (${{ matrix.os }})
+    runs-on: ${{ matrix.os }}
+    timeout-minutes: 30
+    strategy:
+      fail-fast: false
+      matrix:
+        os: [ubuntu-24.04, windows-2025, macos-15]
+    env:
+      # The specs set it too; mpv itself is not installed on these runners.
+      WT_FAKE_PLAYER: '1'
+    steps:
+      - uses: actions/checkout@v7
+      - uses: actions/setup-node@v7
+        with:
+          node-version: ${{ env.NODE_VERSION }}
+          cache: npm
+      - run: npm ci
+      - name: Allow Electron's sandbox and install Xvfb (Linux)
+        if: runner.os == 'Linux'
+        # Ubuntu 24.04 blocks the unprivileged user namespaces Chromium's sandbox needs.
+        run: |
+          sudo sysctl -w kernel.apparmor_restrict_unprivileged_userns=0
+          command -v xvfb-run || { sudo apt-get update && sudo apt-get install -y --no-install-recommends xvfb; }
+      - run: npm run build
+      - name: Playwright (Xvfb)
+        if: runner.os == 'Linux'
+        run: xvfb-run -a npx playwright test
+      - name: Playwright
+        if: runner.os != 'Linux'
+        run: npx playwright test
+      - uses: actions/upload-artifact@v7
+        if: failure()
+        with:
+          name: e2e-results-${{ matrix.os }}
+          path: test-results/
+          if-no-files-found: ignore
+          retention-days: 7
+
+  package:
+    name: package (${{ matrix.target }})
+    runs-on: ${{ matrix.os }}
+    timeout-minutes: 45
+    strategy:
+      fail-fast: false
+      matrix:
+        include:
+          - target: linux-x64
+            os: ubuntu-24.04
+            builder: --linux AppImage deb rpm pacman --x64
+          - target: win-x64
+            os: windows-2025
+            builder: --win nsis zip --x64
+          - target: mac-arm64
+            os: macos-15
+            builder: --mac dmg zip --arm64
+          - target: mac-x64
+            os: macos-15-intel
+            builder: --mac dmg zip --x64
+    env:
+      # electron-builder skips macOS signing in pull requests unless this is set. The identity is ad hoc ('-'), so no
+      # secret is involved, and pull requests get the same signature (and codesign checks) as releases.
+      CSC_FOR_PULL_REQUEST: 'true'
+    steps:
+      - uses: actions/checkout@v7
+      - uses: actions/setup-node@v7
+        with:
+          node-version: ${{ env.NODE_VERSION }}
+          cache: npm
+      - run: npm ci
+      - name: Packaging tools, Electron's sandbox, Xvfb (Linux)
+        if: runner.os == 'Linux'
+        # rpm: rpmbuild for the rpm target; libarchive-tools: bsdtar for the pacman target.
+        run: |
+          sudo apt-get update
+          sudo apt-get install -y --no-install-recommends rpm libarchive-tools xvfb
+          sudo sysctl -w kernel.apparmor_restrict_unprivileged_userns=0
+      - name: Bundled mpv (official v0.41.0 build, SHA-256 pinned)
+        if: runner.os != 'Linux'
+        run: node scripts/fetch-mpv.mjs --platform ${{ matrix.target }}
+      - run: npm run build
+      - run: npx electron-builder ${{ matrix.builder }} --publish never
+      - name: Check the packages and launch the app with --selftest (Linux)
+        if: runner.os == 'Linux'
+        # No FUSE on the runner: the AppImage runtime extracts itself and runs instead of mounting.
+        env:
+          APPIMAGE_EXTRACT_AND_RUN: '1'
+        run: xvfb-run -a node scripts/check-package.mjs --selftest
+      - name: Check the packages and launch the app with --selftest
+        if: runner.os != 'Linux'
+        run: node scripts/check-package.mjs --selftest
+      - name: Downloaded copies keep the signature (macOS zip as Archive Utility unpacks it, and the DMG)
+        if: runner.os == 'macOS'
+        run: |
+          set -euo pipefail
+          zip=$(ls release/*/*-mac-*.zip)
+          dmg=$(ls release/*/*-mac-*.dmg)
+          tmp=$(mktemp -d)
+          mkdir "$tmp/dmg"
+          ditto -x -k "$zip" "$tmp/zip"
+          codesign --verify --deep --strict --verbose=2 "$tmp/zip/Watch Together.app"
+          hdiutil attach -nobrowse -readonly -mountpoint "$tmp/dmg" "$dmg"
+          codesign --verify --deep --strict --verbose=2 "$tmp/dmg/Watch Together.app"
+          codesign -dv "$tmp/dmg/Watch Together.app/Contents/Resources/mpv/mpv.app" 2>&1 | grep -E '^(Identifier|Signature)='
+          hdiutil detach "$tmp/dmg"
+      - name: Install, check the invite-link registration, uninstall (NSIS, per user)
+        if: runner.os == 'Windows'
+        shell: pwsh
+        run: |
+          $ErrorActionPreference = 'Stop'
+          $key = 'HKCU:\Software\Classes\watchtogether'
+          $setup = Get-ChildItem -Path release -Recurse -Filter '*Setup*.exe' | Select-Object -First 1
+          $p = Start-Process -FilePath $setup.FullName -ArgumentList '/S', '/currentuser' -Wait -PassThru
+          if ($p.ExitCode -ne 0) { throw "installer exited with $($p.ExitCode)" }
+          $cmd = (Get-ItemProperty -Path "$key\shell\open\command").'(default)'
+          Write-Host "watchtogether:// -> $cmd"
+          if ($null -eq (Get-ItemProperty -Path $key).'URL Protocol') { throw 'URL Protocol value missing' }
+          if ($cmd -notmatch '^"(.+\\Watch Together\.exe)" "%1"$') { throw "unexpected open command: $cmd" }
+          $exe = $Matches[1]
+          if (-not (Test-Path $exe)) { throw "installed app missing: $exe" }
+          $dir = Split-Path $exe
+          # _?= keeps the uninstaller in place, so -Wait waits for the uninstall itself
+          $p = Start-Process -FilePath (Join-Path $dir 'Uninstall Watch Together.exe') -ArgumentList '/S', "_?=$dir" -Wait -PassThru
+          if ($p.ExitCode -ne 0) { throw "uninstaller exited with $($p.ExitCode)" }
+          if (Test-Path $key) { throw "$key is still registered after uninstalling" }
+          Write-Host 'installed, registered watchtogether://, uninstalled and unregistered'
+      - uses: actions/upload-artifact@v7
+        with:
+          name: package-${{ matrix.target }}
+          path: |
+            release/*/*.AppImage
+            release/*/*.deb
+            release/*/*.rpm
+            release/*/*.pacman
+            release/*/*Setup*.exe
+            release/*/*.zip
+            release/*/*.dmg
+          if-no-files-found: error
+          retention-days: 14

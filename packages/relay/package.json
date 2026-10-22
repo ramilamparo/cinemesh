@@ -1,0 +1,32 @@
+{
+  "name": "wt-relay",
+  "version": "0.1.0",
+  "private": true,
+  "description": "Blind UDP relay for Watch Together members whose NATs cannot reach each other",
+  "license": "MIT",
+  "type": "module",
+  "main": "./src/index.js",
+  "types": "./src/index.d.ts",
+  "bin": {
+    "wt-relay": "./bin.js"
+  },
+  "files": [
+    "bin.js",
+    "src",
+    "wt-relay.service",
+    "README.md"
+  ],
+  "engines": {
+    "node": ">=20"
+  },
+  "dependencies": {
+    "blind-relay": "1.6.1",
+    "hyperdht": "6.34.1"
+  },
+  "exports": {
+    ".": {
+      "types": "./src/index.d.ts",
+      "default": "./src/index.js"
+    }
+  }
+}

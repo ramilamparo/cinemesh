@@ -1,0 +1,12 @@
+node_modules/
+out/
+dist/
+release/
+vendor/
+coverage/
+test-results/
+playwright-report/
+*.log
+.DS_Store
+.wt-partial/
+spikes/**/data/

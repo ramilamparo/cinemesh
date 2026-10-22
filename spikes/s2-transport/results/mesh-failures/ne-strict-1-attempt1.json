@@ -1,0 +1,74 @@
+{
+  "label": "ne-strict-1",
+  "failure": "timeout waiting for full mesh of ctrl lanes",
+  "mesh": {
+    "ms": null,
+    "events": [
+      "0.48s host: ctrl-open v3 live=3 swarmConns=3",
+      "0.48s host: ctrl-open v2 live=3 swarmConns=3",
+      "0.48s host: ctrl-open v1 live=3 swarmConns=3",
+      "0.48s v1: ctrl-open host live=1 swarmConns=1",
+      "0.48s v2: ctrl-open host live=1 swarmConns=1",
+      "0.49s v3: ctrl-open host live=1 swarmConns=1",
+      "7.83s v3: ctrl-open v2 live=2 swarmConns=2",
+      "7.83s v2: ctrl-open v3 live=2 swarmConns=3",
+      "8.17s v3: ctrl-open v1 live=3 swarmConns=3",
+      "8.17s v1: ctrl-open v3 live=2 swarmConns=2",
+      "20.78s v2: close 8139770e live=2 swarmConns=2",
+      "39.14s v2: close 8139770e live=2 swarmConns=2",
+      "60.52s host: close v3 live=2 swarmConns=2",
+      "60.52s host: close v1 live=1 swarmConns=1",
+      "60.52s host: close v2 live=0 swarmConns=0",
+      "60.52s v3: close host live=2 swarmConns=2",
+      "60.52s v3: close v2 live=1 swarmConns=1",
+      "60.52s v3: close v1 live=0 swarmConns=0",
+      "60.52s v2: close host live=1 swarmConns=1",
+      "60.52s v2: close v3 live=0 swarmConns=0",
+      "60.52s v1: close host live=1 swarmConns=1",
+      "60.52s v1: close v3 live=0 swarmConns=0"
+    ]
+  },
+  "config": {
+    "upLimit": null,
+    "downLimit": null,
+    "mesh": "ordered",
+    "viewers": 3,
+    "reqq": null,
+    "bp": "strict",
+    "relay": false,
+    "oneProcess": false,
+    "reattach": null,
+    "maxMs": 30000,
+    "idleMs": 6000,
+    "netem": "qdisc noqueue 0: root refcnt 2"
+  },
+  "env": {
+    "cpus": 14,
+    "loadavgBefore": [
+      6.85,
+      5.03,
+      3.73
+    ],
+    "loadavgAfter": [
+      2.91,
+      4.24,
+      3.54
+    ],
+    "node": "v26.6.0"
+  },
+  "source": {
+    "sizeBefore": 2147495993,
+    "sizeAfter": 2147495993,
+    "mtimeBefore": 1792356631195.685,
+    "mtimeAfter": 1792356631195.685,
+    "unchanged": true
+  },
+  "relay": null,
+  "reportsReceived": [
+    "v1",
+    "v3",
+    "v2",
+    "host"
+  ],
+  "error": "missing reports"
+}

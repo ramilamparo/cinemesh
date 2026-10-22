@@ -1,0 +1,70 @@
+.region {
+  position: fixed;
+  right: 16px;
+  bottom: 16px;
+  z-index: 60;
+  display: flex;
+  flex-direction: column;
+  gap: 8px;
+  width: min(380px, calc(100vw - 32px));
+  pointer-events: none;
+}
+
+.toast {
+  pointer-events: auto;
+  display: flex;
+  align-items: center;
+  gap: 8px;
+  padding: 10px 10px 10px 12px;
+  border-radius: 10px;
+  background: var(--surface);
+  border: 1px solid var(--border);
+  border-left-width: 4px;
+  box-shadow: 0 6px 20px rgb(0 0 0 / 0.18);
+}
+
+.toast[data-level='warn'] {
+  border-left-color: var(--tl-downloading);
+}
+
+.toast[data-level='error'] {
+  border-left-color: var(--danger);
+}
+
+.toast[data-level='info'] {
+  border-left-color: var(--accent);
+}
+
+.icon {
+  flex: none;
+}
+
+.message {
+  flex: 1;
+  min-width: 0;
+}
+
+.dismiss {
+  border: 0;
+  background: none;
+  font-size: 18px;
+  line-height: 1;
+  padding: 2px 6px;
+}
+
+/*
+ * While a dialog is open, toasts move to the top edge and let every click through, so they never cover the
+ * dialog's buttons (Save, Cancel, …). They stay readable; dismissing waits until the dialog closes.
+ */
+:global(body:has([role='dialog'][aria-modal='true'])) .region {
+  top: 48px;
+  bottom: auto;
+  left: 50%;
+  right: auto;
+  transform: translateX(-50%);
+}
+
+:global(body:has([role='dialog'][aria-modal='true'])) .toast {
+  pointer-events: none;
+  opacity: 0.95;
+}

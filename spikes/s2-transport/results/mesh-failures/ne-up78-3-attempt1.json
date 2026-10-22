@@ -1,0 +1,78 @@
+{
+  "label": "ne-up78-3",
+  "failure": "timeout waiting for full mesh of ctrl lanes",
+  "mesh": {
+    "ms": null,
+    "events": [
+      "0.51s host: ctrl-open v1 live=1 swarmConns=1",
+      "0.51s v1: ctrl-open host live=1 swarmConns=1",
+      "7.74s v1: ctrl-open v2 live=2 swarmConns=2",
+      "7.74s v2: ctrl-open v1 live=1 swarmConns=3",
+      "13.46s v2: close 8a88e3dd live=1 swarmConns=2",
+      "13.46s v2: close ca93ac17 live=1 swarmConns=1",
+      "15.08s v2: ctrl-open v3 live=2 swarmConns=3",
+      "15.08s v3: ctrl-open v2 live=1 swarmConns=3",
+      "21.37s v3: close 8a88e3dd live=1 swarmConns=2",
+      "21.37s v3: close 8139770e live=1 swarmConns=1",
+      "28.03s v2: close 8a88e3dd live=2 swarmConns=2",
+      "28.24s v1: ctrl-open v3 live=3 swarmConns=3",
+      "28.24s v3: ctrl-open v1 live=2 swarmConns=3",
+      "33.03s v2: ctrl-open host live=3 swarmConns=3",
+      "33.03s host: ctrl-open v2 live=2 swarmConns=2",
+      "41.19s v3: close 8a88e3dd live=2 swarmConns=2",
+      "60.51s host: close v1 live=1 swarmConns=1",
+      "60.51s host: close v2 live=0 swarmConns=0",
+      "60.51s v2: close v1 live=2 swarmConns=2",
+      "60.51s v2: close v3 live=1 swarmConns=1",
+      "60.51s v2: close host live=0 swarmConns=0",
+      "60.51s v1: close host live=2 swarmConns=2",
+      "60.51s v1: close v2 live=1 swarmConns=1",
+      "60.51s v1: close v3 live=0 swarmConns=0",
+      "60.51s v3: close v1 live=1 swarmConns=1",
+      "60.51s v3: close v2 live=0 swarmConns=0"
+    ]
+  },
+  "config": {
+    "upLimit": "4000,300",
+    "downLimit": null,
+    "mesh": "ordered",
+    "viewers": 3,
+    "reqq": null,
+    "bp": "strict",
+    "relay": false,
+    "oneProcess": false,
+    "reattach": null,
+    "maxMs": 30000,
+    "idleMs": 6000,
+    "netem": "qdisc noqueue 0: root refcnt 2"
+  },
+  "env": {
+    "cpus": 14,
+    "loadavgBefore": [
+      0.59,
+      1.75,
+      2.5
+    ],
+    "loadavgAfter": [
+      0.34,
+      1.47,
+      2.36
+    ],
+    "node": "v26.6.0"
+  },
+  "source": {
+    "sizeBefore": 2147495993,
+    "sizeAfter": 2147495993,
+    "mtimeBefore": 1792356631195.685,
+    "mtimeAfter": 1792356631195.685,
+    "unchanged": true
+  },
+  "relay": null,
+  "reportsReceived": [
+    "v1",
+    "v2",
+    "v3",
+    "host"
+  ],
+  "error": "missing reports"
+}

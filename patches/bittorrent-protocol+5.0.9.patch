@@ -1,0 +1,266 @@
+diff --git a/node_modules/bittorrent-protocol/index.js b/node_modules/bittorrent-protocol/index.js
+index d34827a..80ff2b2 100644
+--- a/node_modules/bittorrent-protocol/index.js
++++ b/node_modules/bittorrent-protocol/index.js
+@@ -112,6 +112,13 @@ class Wire extends Duplex {
+ 
+     this.requests = [] // outgoing
+     this.peerRequests = [] // incoming
++    // watch-together: with holdRequests set (before the first request comes in), a request is not answered at once.
++    // It waits in heldRequests, announced by 'request-held', until releaseRequest() answers it as _onRequest would
++    // have, or refuseRequest() turns it down. A cancel drops it, a choke rejects it (BEP 6), a close clears them.
++    this.holdRequests = false
++    this.heldRequests = []
++    // watch-together: every byte pushed to the readable side, i.e. queued towards the connection
++    this.pushedBytes = 0
+ 
+     this.extendedMapping = {} // number -> string, ex: 1 -> 'ut_metadata'
+     this.peerExtendedMapping = {} // string -> number, ex: 9 -> 'ut_metadata'
+@@ -382,6 +389,14 @@ class Wire extends Duplex {
+         this.peerRequests.pop()
+       }
+     }
++
++    // watch-together: held requests are requests too. Without the fast extension the peer drops its own on a choke.
++    const held = this.heldRequests
++    this.heldRequests = []
++    for (const request of held) {
++      if (this.hasFast && this.allowedFastSet.includes(request.piece)) this.heldRequests.push(request)
++      else if (this.hasFast) this._sendReject(request.piece, request.offset, request.length)
++    }
+   }
+ 
+   /**
+@@ -535,11 +550,36 @@ class Wire extends Duplex {
+    */
+   reject (index, offset, length) {
+     if (!this.hasFast) throw Error('fast extension is disabled')
+-    this._debug('reject index=%d offset=%d length=%d', index, offset, length)
+     this._pull(this.peerRequests, index, offset, length)
++    this._sendReject(index, offset, length)
++  }
++
++  _sendReject (index, offset, length) {
++    this._debug('reject index=%d offset=%d length=%d', index, offset, length)
+     this._message(0x10, [index, offset, length], null)
+   }
+ 
++  /**
++   * watch-together: answer a held request (holdRequests) as _onRequest would have: 'request' with a respond
++   * callback. `onAnswered`, if given, runs once that callback ran, after the block (if any) was pushed.
++   * @return {boolean} false when no such request is held (cancelled, rejected by a choke, or the wire closed)
++   */
++  releaseRequest (index, offset, length, onAnswered) {
++    if (!this._pullHeld(index, offset, length)) return false
++    this._answerRequest(index, offset, length, onAnswered || null)
++    return true
++  }
++
++  /**
++   * watch-together: turn a held request down: a reject (BEP 6) with the fast extension, else it goes unanswered.
++   * @return {boolean} false when no such request is held
++   */
++  refuseRequest (index, offset, length) {
++    if (!this._pullHeld(index, offset, length)) return false
++    if (this.hasFast) this._sendReject(index, offset, length)
++    return true
++  }
++
+   /**
+    * Message: "allowed-fast" <len=0x0005><id=0x11><piece index> (BEP6)
+    * @param {number} index
+@@ -558,7 +598,13 @@ class Wire extends Duplex {
+    */
+   extended (ext, obj) {
+     this._debug('extended ext=%s', ext)
+-    if (typeof ext === 'string' && this.peerExtendedMapping[ext]) {
++    if (typeof ext === 'string') {
++      // watch-together: a peer that did not announce an extension (or disabled it, id 0) cannot read its
++      // messages. Throwing here reached the parser: ut_metadata answers a request the peer sent anyway.
++      if (!this.peerExtendedMapping[ext]) {
++        this._debug('dropping %s message: the peer does not support it', ext)
++        return
++      }
+       ext = this.peerExtendedMapping[ext]
+     }
+     if (typeof ext === 'number') {
+@@ -601,6 +647,7 @@ class Wire extends Duplex {
+ 
+   _push (data) {
+     if (this._finished) return
++    this.pushedBytes += data.length
+     if (this._encryptor) data = this._encryptor.encrypt(data)
+     return this.push(data)
+   }
+@@ -695,8 +742,16 @@ class Wire extends Duplex {
+       return
+     }
+     this._debug('got request index=%d offset=%d length=%d', index, offset, length)
++    if (this.holdRequests) {
++      this.heldRequests.push(new Request(index, offset, length, null))
++      this.emit('request-held', index, offset, length)
++      return
++    }
++    this._answerRequest(index, offset, length, null)
++  }
+ 
+-    const respond = (err, buffer) => {
++  _answerRequest (index, offset, length, onAnswered) {
++    const answer = (err, buffer) => {
+       if (request !== this._pull(this.peerRequests, index, offset, length)) return
+       if (err) {
+         this._debug('error satisfying request index=%d offset=%d length=%d (%s)', index, offset, length, err.message)
+@@ -705,6 +760,14 @@ class Wire extends Duplex {
+       }
+       this.piece(index, offset, buffer)
+     }
++    const respond = !onAnswered
++      ? answer
++      : (err, buffer) => {
++          answer(err, buffer)
++          const done = onAnswered
++          onAnswered = null
++          if (done) done()
++        }
+ 
+     const request = new Request(index, offset, length, respond)
+     this.peerRequests.push(request)
+@@ -722,7 +785,8 @@ class Wire extends Duplex {
+ 
+   _onCancel (index, offset, length) {
+     this._debug('got cancel index=%d offset=%d length=%d', index, offset, length)
+-    this._pull(this.peerRequests, index, offset, length)
++    // watch-together: a held request is dropped, unanswered
++    if (!this._pullHeld(index, offset, length)) this._pull(this.peerRequests, index, offset, length)
+     this.emit('cancel', index, offset, length)
+   }
+ 
+@@ -808,12 +872,15 @@ class Wire extends Duplex {
+ 
+       if (typeof info.m === 'object') {
+         for (const name in info.m) {
+-          this.peerExtendedMapping[name] = Number(info.m[name].toString())
++          // watch-together: BEP 10 ids are integers, 0 = not supported. Number(value.toString()) threw out of
++          // the parser for a dict with its own 'toString' key, and kept ids over 255 that no message can carry.
++          const id = info.m[name]
++          this.peerExtendedMapping[name] = Number.isInteger(id) && id >= 0 && id <= 255 ? id : 0
+         }
+       }
+       for (const name in this._ext) {
+         if (this.peerExtendedMapping[name]) {
+-          this._ext[name].onExtendedHandshake(this.peerExtendedHandshake)
++          if (!this._runExtension(name, 'onExtendedHandshake', this.peerExtendedHandshake)) return
+         }
+       }
+       this._debug('got extended handshake')
+@@ -823,7 +890,7 @@ class Wire extends Duplex {
+         ext = this.extendedMapping[ext] // friendly name for extension
+         if (this._ext[ext]) {
+           // there is an registered extension handler, so call it
+-          this._ext[ext].onMessage(buf)
++          if (!this._runExtension(ext, 'onMessage', buf)) return
+         }
+       }
+       this._debug('got extended message ext=%s', ext)
+@@ -831,6 +898,31 @@ class Wire extends Duplex {
+     }
+   }
+ 
++  /**
++   * watch-together: an extension's handler, run on what the peer sent. One that throws (ut_metadata reads
++   * msg_type from the null bencode returns for an empty message) threw out of the parser: an uncaught exception
++   * in the core, sent at will by any room member. The wire is dropped instead.
++   */
++  _runExtension (name, method, arg) {
++    try {
++      this._ext[name][method](arg)
++      return true
++    } catch (err) {
++      this._drop('extension %s failed on a message from the peer: %s', name, (err && err.message) || err)
++      return false
++    }
++  }
++
++  /** watch-together: the peer sent what we cannot parse past: drop what is buffered, parse nothing more, close. */
++  _drop (...reason) {
++    reason[0] = 'Error: ' + reason[0]
++    this._debug(...reason)
++    this._parse(Infinity, () => {})
++    this._buffer = []
++    this._bufferSize = 0
++    this.destroy()
++  }
++
+   _onTimeout () {
+     this._debug('request timed out')
+     this._callback(this.requests.shift(), new Error('request has timed out'), null)
+@@ -848,13 +940,23 @@ class Wire extends Duplex {
+    */
+   _write (data, cb) {
+     if (this._encryptor) data = this._encryptor.decrypt(data)
+-    this._bufferSize += data.length
+-    this._buffer.push(data)
+-    if (this._buffer.length > 1) {
++    // watch-together: joining the whole buffer on every write is quadratic when a message trickles in as
++    // tiny (or empty) writes. Join only once the parser can run (or the pattern search needs one buffer),
++    // or when the chunk list outgrows ~1 per KiB buffered, which bounds the cost at ~1 KiB per write.
++    if (data.length > 0) {
++      this._bufferSize += data.length
++      this._buffer.push(data)
++    }
++    if (
++      this._buffer.length > 1 &&
++      (this._bufferSize >= this._parserSize ||
++        this._cryptoSyncPattern ||
++        this._buffer.length > 16 + (this._bufferSize >> 10))
++    ) {
+       this._buffer = [concat(this._buffer, this._bufferSize)]
+     }
+-    // now this._buffer is an array containing a single Buffer
+-    this._processBuffer()
++    // this._buffer holds a single Buffer whenever the parser can run
++    if (this._buffer.length > 0) this._processBuffer()
+     cb(null) // Signal that we're ready for more data
+   }
+ 
+@@ -944,6 +1046,12 @@ class Wire extends Duplex {
+    */
+   _onMessageLength (buffer) {
+     const length = getUint32(buffer)
++    // watch-together: our peers only send 16 KiB blocks, bitfields and small extension messages; a huge
++    // length prefix would make us buffer (and re-concatenate) up to 4 GiB from a malicious member.
++    if (length > 1048576) {
++      this._drop('message of %d bytes exceeds the 1 MiB limit', length) // the framing is lost
++      return
++    }
+     if (length > 0) {
+       this._parse(length, this._onMessage)
+     } else {
+@@ -1058,6 +1166,7 @@ class Wire extends Duplex {
+     while (this.peerRequests.length) {
+       this.peerRequests.pop()
+     }
++    this.heldRequests = []
+     while (this.requests.length) {
+       this._callback(this.requests.pop(), new Error('wire was closed'), null)
+     }
+@@ -1068,6 +1177,19 @@ class Wire extends Duplex {
+     debug(...args)
+   }
+ 
++  // watch-together: _pull's unordered remove would reorder the held requests, which wait in arrival order
++  _pullHeld (piece, offset, length) {
++    const requests = this.heldRequests
++    for (let i = 0; i < requests.length; i++) {
++      const req = requests[i]
++      if (req.piece === piece && req.offset === offset && req.length === length) {
++        requests.splice(i, 1)
++        return req
++      }
++    }
++    return null
++  }
++
+   _pull (requests, piece, offset, length) {
+     for (let i = 0; i < requests.length; i++) {
+       const req = requests[i]

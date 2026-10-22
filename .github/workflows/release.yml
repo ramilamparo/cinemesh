@@ -1,0 +1,121 @@
+# Release (plan §4.6 "Signing" and "CI"). For a v* tag that matches package.json's version:
+#   1. run the whole CI workflow, which builds, checks and smoke-launches every package (ci.yml, workflow_call);
+#   2. attach the packages to a DRAFT GitHub release, with SHA256SUMS and the mpv source tarball that
+#      resources/licenses/mpv/SOURCE-OFFER.md promises. With the MINISIGN_SECRET_KEY secret set (an unencrypted key
+#      from `minisign -G -W`), SHA256SUMS is also signed (SHA256SUMS.minisig).
+# Publishing the draft stays a manual step. The builds are unsigned (ad-hoc on macOS): docs/install.md.
+name: Release
+
+on:
+  push:
+    tags: ['v*']
+
+permissions:
+  contents: read
+
+jobs:
+  version:
+    name: tag matches package.json
+    runs-on: ubuntu-24.04
+    timeout-minutes: 5
+    steps:
+      - uses: actions/checkout@v7
+      - name: Compare the tag with package.json
+        env:
+          TAG: ${{ github.ref_name }}
+        run: |
+          version=$(node -p 'require("./package.json").version')
+          if [ "$TAG" != "v$version" ]; then
+            echo "::error::tag $TAG does not match package.json version $version"
+            exit 1
+          fi
+
+  ci:
+    needs: version
+    uses: ./.github/workflows/ci.yml
+    permissions:
+      contents: read
+
+  release:
+    name: draft release
+    needs: ci
+    runs-on: ubuntu-24.04
+    timeout-minutes: 20
+    permissions:
+      contents: write
+    env:
+      TAG: ${{ github.ref_name }}
+    steps:
+      - uses: actions/checkout@v7
+      - uses: actions/setup-node@v7
+        with:
+          node-version: '24'
+      - uses: actions/download-artifact@v8
+        with:
+          pattern: package-*
+          path: dist
+          merge-multiple: true
+      - name: Flatten the artifacts (upload-artifact keeps release/<version>/ below the wildcard)
+        run: |
+          find dist -mindepth 2 -type f -exec mv -n -t dist -- {} +
+          find dist -mindepth 1 -type d -empty -delete
+          ls -la dist
+      - name: mpv source tarball (corresponding source of the bundled mpv, SHA-256 pinned)
+        run: |
+          node scripts/fetch-mpv.mjs --source
+          cp vendor/mpv/source/mpv-*.tar.gz dist/
+      - name: Asset names without spaces, and SHA256SUMS
+        working-directory: dist
+        run: |
+          for f in *' '*; do
+            if [ -e "$f" ]; then mv -- "$f" "${f// /-}"; fi
+          done
+          sha256sum -- * > SHA256SUMS
+          cat SHA256SUMS
+      - name: Is a minisign key configured?
+        id: minisign
+        env:
+          HAS_KEY: ${{ secrets.MINISIGN_SECRET_KEY != '' }}
+        run: echo "sign=$HAS_KEY" >> "$GITHUB_OUTPUT"
+      - name: Sign SHA256SUMS (minisign)
+        if: steps.minisign.outputs.sign == 'true'
+        env:
+          MINISIGN_SECRET_KEY: ${{ secrets.MINISIGN_SECRET_KEY }}
+        run: |
+          sudo apt-get update
+          sudo apt-get install -y --no-install-recommends minisign
+          key="$RUNNER_TEMP/minisign.key"
+          (umask 077 && printf '%s\n' "$MINISIGN_SECRET_KEY" > "$key")
+          minisign -S -s "$key" -m dist/SHA256SUMS -t "Watch Together $TAG" < /dev/null
+          rm -f "$key"
+      - name: Release notes
+        env:
+          INSTALL_DOC: ${{ github.server_url }}/${{ github.repository }}/blob/${{ github.ref_name }}/docs/install.md
+        run: |
+          v="${TAG#v}"
+          cat > "$RUNNER_TEMP/notes.md" <<EOF
+          These builds are not code-signed. [Installing Watch Together]($INSTALL_DOC) shows how to open them on
+          macOS (Open Anyway) and Windows (SmartScreen: More info, then Run anyway).
+
+          | System | Download |
+          | --- | --- |
+          | Windows 10/11 (x64) | \`Watch-Together-Setup-$v.exe\` (installer) or \`Watch-Together-$v-win.zip\` |
+          | Mac with Apple silicon | \`Watch-Together-$v-mac-arm64.dmg\` (or \`.zip\`) |
+          | Mac with an Intel processor | \`Watch-Together-$v-mac-x64.dmg\` (or \`.zip\`) |
+          | Linux (x64) | \`Watch-Together-$v.AppImage\`, \`watch-together-p2p_${v}_amd64.deb\`, \`watch-together-p2p-$v.x86_64.rpm\`, \`watch-together-p2p-$v.pacman\` |
+
+          On Linux, install mpv 0.39 or newer, or the Flatpak \`io.mpv.Mpv\`. The Windows and macOS packages include
+          mpv 0.41.0, which is GPL software: its source code is attached as \`mpv-0.41.0.tar.gz\`, and the app's
+          \`licenses/mpv/SOURCE-OFFER.md\` says which builds are included. The app needs macOS 13 or later; the mpv it
+          includes needs macOS 14 on Apple silicon and macOS 15 on Intel (older Macs can use their own mpv).
+
+          Check a download with \`sha256sum --check --ignore-missing SHA256SUMS\` (and, when \`SHA256SUMS.minisig\` is
+          attached, \`minisign -Vm SHA256SUMS -P <public key>\` first).
+          EOF
+          cat "$RUNNER_TEMP/notes.md"
+      - name: Create the draft release
+        env:
+          GH_TOKEN: ${{ github.token }}
+        run: |
+          gh release create "$TAG" dist/* --draft --verify-tag \
+            --title "Watch Together ${TAG#v}" --notes-file "$RUNNER_TEMP/notes.md"

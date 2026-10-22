@@ -1,0 +1,180 @@
+{
+  "label": "op-strict-3",
+  "failure": null,
+  "mesh": {
+    "ms": 8414,
+    "events": [
+      "0.44s host: ctrl-open v3 live=3 swarmConns=3",
+      "0.44s host: ctrl-open v2 live=3 swarmConns=3",
+      "0.44s host: ctrl-open v1 live=3 swarmConns=3",
+      "0.44s v3: ctrl-open host live=1 swarmConns=1",
+      "0.44s v2: ctrl-open host live=1 swarmConns=1",
+      "0.44s v1: ctrl-open host live=1 swarmConns=1",
+      "8.24s v1: ctrl-open v3 live=2 swarmConns=2",
+      "8.24s v3: ctrl-open v1 live=2 swarmConns=2",
+      "8.77s v3: ctrl-open v2 live=3 swarmConns=3",
+      "8.77s v1: ctrl-open v2 live=3 swarmConns=3",
+      "8.77s v2: ctrl-open v1 live=3 swarmConns=3",
+      "8.77s v2: ctrl-open v3 live=3 swarmConns=3",
+      "74.87s v1: close host live=2 swarmConns=2",
+      "74.87s v1: close v3 live=1 swarmConns=1",
+      "74.87s v1: close v2 live=0 swarmConns=0",
+      "74.87s v3: close v1 live=2 swarmConns=2",
+      "74.87s v2: close host live=2 swarmConns=2",
+      "74.87s v2: close v1 live=1 swarmConns=1",
+      "74.87s v2: close v3 live=0 swarmConns=0",
+      "74.87s v3: close host live=1 swarmConns=1",
+      "74.87s v3: close v2 live=0 swarmConns=0",
+      "74.87s host: close v3 live=2 swarmConns=2",
+      "74.87s host: close v1 live=1 swarmConns=1",
+      "74.87s host: close v2 live=0 swarmConns=0"
+    ]
+  },
+  "config": {
+    "upLimit": null,
+    "downLimit": null,
+    "mesh": "ordered",
+    "viewers": 3,
+    "reqq": null,
+    "bp": "strict",
+    "relay": false,
+    "oneProcess": true,
+    "reattach": null,
+    "maxMs": 60000,
+    "idleMs": 6000,
+    "netem": "qdisc noqueue 0: root refcnt 2"
+  },
+  "env": {
+    "cpus": 14,
+    "loadavgBefore": [
+      3.18,
+      3.3,
+      2.83
+    ],
+    "loadavgAfter": [
+      2.77,
+      3.2,
+      2.84
+    ],
+    "node": "v26.6.0"
+  },
+  "source": {
+    "sizeBefore": 2147495993,
+    "sizeAfter": 2147495993,
+    "mtimeBefore": 1792356631195.685,
+    "mtimeAfter": 1792356631195.685,
+    "unchanged": true
+  },
+  "relay": null,
+  "reportsReceived": [
+    "host",
+    "v1",
+    "v2",
+    "v3"
+  ],
+  "throughput": {
+    "perViewer": [
+      {
+        "name": "v1",
+        "done": false,
+        "seconds": 59.8,
+        "MBps": 20.6,
+        "fromHostMB": 1185.6,
+        "fromViewersMB": 46
+      },
+      {
+        "name": "v2",
+        "done": false,
+        "seconds": 60,
+        "MBps": 20.6,
+        "fromHostMB": 1158.2,
+        "fromViewersMB": 74.4
+      },
+      {
+        "name": "v3",
+        "done": false,
+        "seconds": 60,
+        "MBps": 20.5,
+        "fromHostMB": 1230.7,
+        "fromViewersMB": 0
+      }
+    ],
+    "viewerMedianMBps": 20.6,
+    "viewerMinMBps": 20.5,
+    "aggregateViewerMBps": 61.6,
+    "hostUploadMBps": 59.6,
+    "hostUploadedMB": 3578.4,
+    "dupFactorNoStriping": 1.67
+  },
+  "latency": {
+    "ctrl": {
+      "idleP50": 0.37,
+      "idleP95": 0.61,
+      "satP50": 20.16,
+      "satP95": 33.18,
+      "extraP50": 19.78,
+      "extraP95": 32.79,
+      "extraMax": 53,
+      "samples": 1752
+    },
+    "dgramIdle": {
+      "sent": 150,
+      "lossPct": 0,
+      "p50": 0.32,
+      "p95": 0.51,
+      "max": 0.7
+    },
+    "dgramSat": {
+      "sent": 1737,
+      "lossPct": 0,
+      "p50": 5.79,
+      "p95": 10.34,
+      "max": 20.4
+    }
+  },
+  "perProcess": [
+    {
+      "members": "host+v1+v2+v3",
+      "rssBaseMB": 162,
+      "rssPeakMB": 328.6,
+      "rssGrowthMB": 166.6,
+      "arrayBuffersPeakMB": 141.8,
+      "heapPeakMB": 47.6,
+      "cpuPct": 153,
+      "eluPct": 100,
+      "eldIdleP99": 6.25,
+      "eldP50": 5.05,
+      "eldP99": 7.21,
+      "eldMax": 10.6
+    }
+  ],
+  "handshake": {
+    "lanes": 12,
+    "lanesWithWire": 12,
+    "connOpenedMsMax": 1.06,
+    "chOpenedMsP50": 4.43,
+    "chOpenedMsMax": 5.36,
+    "wireMsP50": 11.32,
+    "wireMsMax": 14.83
+  },
+  "reattach": null,
+  "paths": [
+    "host->v3:direct",
+    "host->v2:direct",
+    "host->v1:direct",
+    "v1->host:direct",
+    "v1->v3:direct",
+    "v1->v2:direct",
+    "v2->host:direct",
+    "v2->v1:direct",
+    "v2->v3:direct",
+    "v3->host:direct",
+    "v3->v1:direct",
+    "v3->v2:direct"
+  ],
+  "storeStats": {
+    "gets": 1700,
+    "bytes": 1781542969,
+    "puts": 0
+  }
+}

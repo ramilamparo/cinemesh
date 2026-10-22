@@ -1,0 +1,75 @@
+diff --git a/node_modules/bencode/lib/decode.js b/node_modules/bencode/lib/decode.js
+index e7c5908..a83b86c 100644
+--- a/node_modules/bencode/lib/decode.js
++++ b/node_modules/bencode/lib/decode.js
+@@ -5,6 +5,9 @@ const STRING_DELIM = 0x3A // ':'
+ const DICTIONARY_START = 0x64 // 'd'
+ const LIST_START = 0x6C // 'l'
+ const END_OF_TYPE = 0x65 // 'e'
++// watch-together: peers send what is decoded here (BEP 10 handshakes, ut_metadata). Real messages and torrents
++// nest a few levels; recursing on every 'l' or 'd' of a hostile one ran out of stack instead.
++const MAX_DEPTH = 64
+ 
+ /**
+  * replaces parseInt(buffer.toString('ascii', start, end)).
+@@ -72,6 +75,7 @@ function decode (data, start, end, encoding) {
+   }
+ 
+   decode.position = 0
++  decode.depth = 0
+   decode.encoding = encoding || null
+ 
+   decode.data = !(ArrayBuffer.isView(data))
+@@ -85,6 +89,7 @@ function decode (data, start, end, encoding) {
+ 
+ decode.bytes = 0
+ decode.position = 0
++decode.depth = 0
+ decode.data = null
+ decode.encoding = null
+ 
+@@ -120,6 +125,7 @@ decode.find = function (chr) {
+ 
+ decode.dictionary = function () {
+   decode.position++
++  if (++decode.depth > MAX_DEPTH) throw new Error('Invalid data: nested deeper than ' + MAX_DEPTH)
+ 
+   const dict = {}
+ 
+@@ -131,12 +137,14 @@ decode.dictionary = function () {
+   }
+ 
+   decode.position++
++  decode.depth--
+ 
+   return dict
+ }
+ 
+ decode.list = function () {
+   decode.position++
++  if (++decode.depth > MAX_DEPTH) throw new Error('Invalid data: nested deeper than ' + MAX_DEPTH)
+ 
+   const lst = []
+ 
+@@ -145,6 +153,7 @@ decode.list = function () {
+   }
+ 
+   decode.position++
++  decode.depth--
+ 
+   return lst
+ }
+@@ -161,6 +170,13 @@ decode.integer = function () {
+ decode.buffer = function () {
+   let sep = decode.find(STRING_DELIM)
+   const length = getIntFromBuffer(decode.data, decode.position, sep)
++  // watch-together: a length must be a whole number that ends within the data. A negative one moved the
++  // position backwards, so a dict or list never ended and the event loop stopped; one past the end returned
++  // a short string. Now every step moves forward (an integer or a list or dict always did), and running out
++  // of data throws, so a decode ends.
++  if (!Number.isSafeInteger(length) || length < 0 || sep + 1 + length > decode.data.length) {
++    throw new Error('Invalid data: string length ' + length + ' at ' + decode.position)
++  }
+   const end = ++sep + length
+ 
+   decode.position = end
