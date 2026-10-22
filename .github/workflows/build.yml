@@ -1,0 +1,76 @@
+# Build: the Windows installer and the Linux AppImage on demand (Actions → Build → Run workflow), without CI's
+# tests. Same packaging steps as ci.yml's package job, for two targets only:
+#   windows  Cinemesh Setup <version>.exe (per-user NSIS installer, registers cinemesh:// links) and
+#            Cinemesh-<version>-win.zip (unpacked app: run Cinemesh.exe, no install), both with the
+#            bundled mpv
+#   linux    Cinemesh-<version>.AppImage (uses the system or Flatpak mpv ≥ 0.39)
+# Each package is checked and launched once with --selftest (scripts/check-package.mjs) before upload. The files are
+# the run's artifacts; release.yml publishes releases for v* tags.
+name: Build
+
+on:
+  workflow_dispatch:
+
+permissions:
+  contents: read
+
+concurrency:
+  group: build-${{ github.ref }}
+  cancel-in-progress: true
+
+env:
+  NODE_VERSION: '24'
+  FORCE_COLOR: '1'
+
+jobs:
+  build:
+    name: ${{ matrix.target }}
+    runs-on: ${{ matrix.os }}
+    timeout-minutes: 45
+    strategy:
+      fail-fast: false
+      matrix:
+        include:
+          - target: windows
+            os: windows-2025
+            mpv: win-x64
+            builder: --win nsis zip --x64
+          - target: linux
+            os: ubuntu-24.04
+            builder: --linux AppImage --x64
+    steps:
+      - uses: actions/checkout@v7
+      - uses: actions/setup-node@v7
+        with:
+          node-version: ${{ env.NODE_VERSION }}
+          cache: npm
+      - run: npm ci
+      - name: Electron's sandbox and Xvfb (Linux)
+        if: runner.os == 'Linux'
+        run: |
+          sudo apt-get update
+          sudo apt-get install -y --no-install-recommends xvfb
+          sudo sysctl -w kernel.apparmor_restrict_unprivileged_userns=0
+      - name: Bundled mpv (official v0.41.0 build, SHA-256 pinned)
+        if: matrix.mpv
+        run: node scripts/fetch-mpv.mjs --platform ${{ matrix.mpv }}
+      - run: npm run build
+      - run: npx electron-builder ${{ matrix.builder }} --publish never
+      - name: Check the package and launch it with --selftest (Linux)
+        if: runner.os == 'Linux'
+        # No FUSE on the runner: the AppImage runtime extracts itself and runs instead of mounting.
+        env:
+          APPIMAGE_EXTRACT_AND_RUN: '1'
+        run: xvfb-run -a node scripts/check-package.mjs --selftest
+      - name: Check the packages and launch the app with --selftest (Windows)
+        if: runner.os == 'Windows'
+        run: node scripts/check-package.mjs --selftest
+      - uses: actions/upload-artifact@v7
+        with:
+          name: cinemesh-${{ matrix.target }}
+          path: |
+            release/*/*.AppImage
+            release/*/*Setup*.exe
+            release/*/*-win.zip
+          if-no-files-found: error
+          retention-days: 30

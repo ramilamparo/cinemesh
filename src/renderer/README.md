@@ -273,8 +273,8 @@ parseSessionReport(raw); if (r) tray.setSession(r) })`.
 `src/main/linux-desktop.ts`
 
 - `registerLinuxDeepLinks(deps?, platform?)` is the `APP_CHANNELS.registerLinuxDeepLinks` handler. On Linux with
-  `$APPIMAGE` set, it writes `$XDG_DATA_HOME/applications/watchtogether-appimage.desktop` (Exec quoted per the
-  spec, `%U`, `MimeType=x-scheme-handler/watchtogether;`). It then runs `update-desktop-database` (best effort)
+  `$APPIMAGE` set, it writes `$XDG_DATA_HOME/applications/app.cinemesh.desktop` (Exec quoted per the
+  spec, `%U`, `MimeType=x-scheme-handler/cinemesh;`). It then runs `update-desktop-database` (best effort)
   and `xdg-mime default`. Without xdg-utils it edits `$XDG_CONFIG_HOME/mimeapps.list` itself.
 - `linuxDeepLinkStatus()` returns `unsupported | unregistered | registered | stale`. `stale` means the AppImage
   moved. Settings shows the button whenever `info.isAppImage`.

@@ -66,7 +66,7 @@ const savedMpvPath = (): unknown =>
   (JSON.parse(readFileSync(join(userData, 'settings.json'), 'utf8')) as { mpvPath?: unknown }).mpvPath
 
 test('boots to Home with the core connected and mpv found', async () => {
-  await expect(page.getByRole('heading', { name: 'Watch together' })).toBeVisible()
+  await expect(page.getByRole('heading', { name: 'Cinemesh' })).toBeVisible()
   await expect(page.getByTestId('core-status')).toContainText('Background process connected')
   const r = await recheck()
   expect(r?.ok).toBe(true)
@@ -111,7 +111,7 @@ test('an mpvPath that is not mpv is reported and the lookup falls back to PATH',
     expect(r.value.tried?.at(-1)).toMatchObject({ source: 'path', status: 'ok' })
   }
   // the app is still on Home: mpv is usable, so MpvSetup does not take over
-  await expect(page.getByRole('heading', { name: 'Watch together' })).toBeVisible()
+  await expect(page.getByRole('heading', { name: 'Cinemesh' })).toBeVisible()
 })
 
 // Last: its toast sits over the Settings footer until it times out.

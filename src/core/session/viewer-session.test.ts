@@ -30,7 +30,7 @@ async function torrent(lengths: number[], pieceLength: number, pieces?: number) 
   const total = lengths.reduce((n, l) => n + l, 0)
   const count = pieces ?? Math.ceil(total / pieceLength)
   const info = {
-    name: 'WatchTogether',
+    name: 'Cinemesh',
     files: lengths.map((length, i) => ({ length, path: [i === 0 ? 'movie.mkv' : `movie.${String(i)}.srt`] })),
     'piece length': pieceLength,
     pieces: new Uint8Array(count * 20),
@@ -324,7 +324,7 @@ describe('the announce', () => {
     ]) {
       const e = failure(raw)
       expect(e.code).toBe('update-required')
-      expect(e.message).toBe('The host uses a newer version of Watch Together. Update the app to join.')
+      expect(e.message).toBe('The host uses a newer version of Cinemesh. Update the app to join.')
     }
   })
 

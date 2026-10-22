@@ -1,16 +1,16 @@
-appId: app.watchtogether.p2p
-productName: Watch Together
+appId: app.cinemesh
+productName: Cinemesh
 # Linux window association: Electron uses package.json desktopName as the Wayland app_id / X11 WM_CLASS, and
 # linux.syncDesktopName names the installed .desktop file after it (StartupWMClass follows), so the running window
 # matches its launcher entry. Injected here because package.json has no desktopName; it must equal
 # `${LINUX_APP_ID}.desktop` in src/main/linux-desktop.ts (checked by linux-desktop.test.ts).
 extraMetadata:
-  desktopName: app.watchtogether.p2p.desktop
+  desktopName: app.cinemesh.desktop
   # The deb/rpm/pacman URL field (electron-builder refuses to build them without a homepage). PLACEHOLDER until the
   # project is published: keep it in step with DOWNLOAD_URL in src/core/net/invite.ts and the issue tracker link in
   # resources/licenses/mpv/SOURCE-OFFER.md.
   homepage: https://github.com/watch-together-p2p/watch-together-p2p
-copyright: Copyright © 2026 Watch Together contributors
+copyright: Copyright © 2026 Cinemesh contributors
 # Icons come from build/ by name: icon.icns (mac), icon.ico (win), icons/<n>x<n>.png (linux). `npm run icons`.
 directories:
   output: release/${version}
@@ -64,9 +64,9 @@ electronFuses:
   grantFileProtocolExtraPrivileges: false
 
 protocols:
-  - name: Watch Together invite
+  - name: Cinemesh invite
     schemes:
-      - watchtogether
+      - cinemesh
 
 mac:
   category: public.app-category.video
@@ -81,7 +81,7 @@ mac:
   # Separate arm64 and x64 builds (one per CI runner); name both, since the default leaves the arch out for x64.
   artifactName: ${productName}-${version}-mac-${arch}.${ext}
   extendInfo:
-    NSLocalNetworkUsageDescription: Watch Together connects directly to your friends' computers to share the video.
+    NSLocalNetworkUsageDescription: Cinemesh connects directly to your friends' computers to share the video.
   # scripts/fetch-mpv.mjs --platform mac-arm64,mac-x64 → <App>.app/Contents/Resources/mpv/mpv.app
   extraResources:
     - from: vendor/mpv/${os}-${arch}
@@ -100,17 +100,17 @@ nsis:
   oneClick: false
   perMachine: false
   allowToChangeInstallationDirectory: true
-  # Writes and removes HKCU\Software\Classes\watchtogether (the invite-link scheme).
+  # Writes and removes HKCU\Software\Classes\cinemesh (the invite-link scheme).
   include: build/installer.nsh
 
 linux:
   category: AudioVideo
   # deb Maintainer / rpm Packager and Vendor / pacman packager (electron-builder requires one; package.json has no
   # author). Add a contact address here once the project has one.
-  maintainer: Watch Together contributors
+  maintainer: Cinemesh contributors
   syncDesktopName: true
   synopsis: Watch videos in sync with friends, shared peer-to-peer
-  # `protocols` above adds MimeType=x-scheme-handler/watchtogether; to the .desktop entry, whose Exec ends in %U.
+  # `protocols` above adds MimeType=x-scheme-handler/cinemesh; to the .desktop entry, whose Exec ends in %U.
   target:
     - AppImage
     - deb

@@ -1,8 +1,10 @@
 {
   "name": "webrtc-polyfill",
   "version": "0.0.0-stub",
-  "description": "Native-free stand-in: Watch Together never uses WebRTC, and the real package loads node-datachannel at import time",
+  "description": "Native-free stand-in: Cinemesh never uses WebRTC, and the real package loads node-datachannel at import time",
   "type": "module",
-  "exports": { ".": "./index.js" },
+  "exports": {
+    ".": "./index.js"
+  },
   "license": "MIT"
 }

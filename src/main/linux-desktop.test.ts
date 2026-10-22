@@ -21,7 +21,7 @@ beforeEach(() => {
   root = mkdtempSync(join(tmpdir(), 'wt-desktop-'))
   ran = []
   deps = {
-    appImage: '/home/u/Apps/Watch Together.AppImage',
+    appImage: '/home/u/My Apps/Cinemesh.AppImage',
     dataHome: join(root, 'share'),
     configHome: join(root, 'config'),
     run: (cmd, args) => {
@@ -43,7 +43,7 @@ describe('linux deep-link registration', () => {
   it('writes a scheme handler entry', () => {
     const entry = desktopEntry('/a b/wt.AppImage')
     expect(entry).toContain('Exec="/a b/wt.AppImage" %U')
-    expect(entry).toContain('MimeType=x-scheme-handler/watchtogether;')
+    expect(entry).toContain('MimeType=x-scheme-handler/cinemesh;')
   })
 
   it('registers via xdg-mime and reports the status', async () => {
@@ -51,10 +51,10 @@ describe('linux deep-link registration', () => {
     expect(await linuxDeepLinkStatus(deps)).toBe('unregistered')
     expect(await registerLinuxDeepLinks(deps, 'linux')).toEqual({ ok: true, value: null })
     const file = readFileSync(join(deps.dataHome, 'applications', DESKTOP_FILE), 'utf8')
-    expect(file).toContain('Exec="/home/u/Apps/Watch Together.AppImage" %U')
+    expect(file).toContain('Exec="/home/u/My Apps/Cinemesh.AppImage" %U')
     expect(ran).toEqual([
       ['update-desktop-database', join(deps.dataHome, 'applications')],
-      ['xdg-mime', 'default', DESKTOP_FILE, 'x-scheme-handler/watchtogether'],
+      ['xdg-mime', 'default', DESKTOP_FILE, 'x-scheme-handler/cinemesh'],
     ])
     expect(await linuxDeepLinkStatus(deps)).toBe('registered')
     expect(await linuxDeepLinkStatus({ ...deps, appImage: '/moved.AppImage' })).toBe('stale')
@@ -64,7 +64,7 @@ describe('linux deep-link registration', () => {
     deps.run = () => Promise.reject(new Error('ENOENT'))
     expect(await registerLinuxDeepLinks(deps, 'linux')).toEqual({ ok: true, value: null })
     const list = readFileSync(join(deps.configHome, 'mimeapps.list'), 'utf8')
-    expect(list).toBe(`[Default Applications]\nx-scheme-handler/watchtogether=${DESKTOP_FILE};\n`)
+    expect(list).toBe(`[Default Applications]\nx-scheme-handler/cinemesh=${DESKTOP_FILE};\n`)
   })
 
   it('refuses outside an AppImage or on other platforms', async () => {
@@ -74,9 +74,9 @@ describe('linux deep-link registration', () => {
 
   it('edits mimeapps.list in place', () => {
     const before =
-      '[Added Associations]\na=b;\n\n[Default Applications]\nx-scheme-handler/watchtogether=old.desktop;\ntext/plain=gedit.desktop;\n'
-    const after = setMimeDefault(before, 'x-scheme-handler/watchtogether', 'new.desktop')
-    expect(after).toContain('x-scheme-handler/watchtogether=new.desktop;')
+      '[Added Associations]\na=b;\n\n[Default Applications]\nx-scheme-handler/cinemesh=old.desktop;\ntext/plain=gedit.desktop;\n'
+    const after = setMimeDefault(before, 'x-scheme-handler/cinemesh', 'new.desktop')
+    expect(after).toContain('x-scheme-handler/cinemesh=new.desktop;')
     expect(after).not.toContain('old.desktop')
     expect(after).toContain('text/plain=gedit.desktop;')
     expect(after).toContain('[Added Associations]\na=b;')

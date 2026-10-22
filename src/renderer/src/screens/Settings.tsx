@@ -112,7 +112,7 @@ function SettingsBody({ settings, onClose }: { settings: Settings; onClose: () =
         <PathRow
           label="Download folder"
           value={form.downloadDir}
-          fallback="Downloads/Watch Together"
+          fallback="Downloads/Cinemesh"
           onPick={() => void pickDir()}
           onReset={() => set('downloadDir', null)}
         />
@@ -419,7 +419,7 @@ function Support(): React.JSX.Element {
     const r = await wt().app.registerLinuxDeepLinks()
     pushToast(
       r.ok
-        ? { level: 'info', message: 'Invite links now open Watch Together.', code: 'links' }
+        ? { level: 'info', message: 'Invite links now open Cinemesh.', code: 'links' }
         : { level: 'error', message: r.message, code: 'links' },
     )
   }
@@ -441,7 +441,7 @@ function Support(): React.JSX.Element {
       </div>
       {isAppImage && (
         <p className="muted" style={{ margin: 0, fontSize: 12 }}>
-          AppImages are not installed, so the system does not know they open watchtogether:// links until you register.
+          AppImages are not installed, so the system does not know they open cinemesh:// links until you register.
         </p>
       )}
     </section>

@@ -87,7 +87,7 @@ describe('AppTray', () => {
     const t = trays[0]
     expect(t?.menu.find((i) => i.label === 'Leave room…')?.enabled).toBe(false)
     tray.setSession({ inRoom: true, title: 'Movie night' })
-    expect(t?.tooltip).toBe('Watch Together · Movie night')
+    expect(t?.tooltip).toBe('Cinemesh · Movie night')
     win.hide()
     t?.menu.find((i) => i.label === 'Leave room…')?.click?.()
     expect(win.visible).toBe(true)
@@ -138,7 +138,7 @@ describe('AppTray', () => {
       cancelId: 1,
       title: 'Saving the video',
       message: 'Quit while the video is being saved?',
-      detail: 'Saving finishes the next time you open Watch Together.',
+      detail: 'Saving finishes the next time you open Cinemesh.',
     })
     expect(await tray.confirmQuit()).toBe(true) // 'Quit'
   })

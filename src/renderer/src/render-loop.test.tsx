@@ -155,7 +155,7 @@ describe('screens render from empty core slices without an update loop', () => {
     act(() => setUi({ settingsOpen: false, leaveOpen: true }))
     await flush()
     expect(byRole(m.container, 'dialog', 'Leave the room?')).toBeTruthy()
-    act(() => setUi({ leaveOpen: false, incomingLink: 'watchtogether://join/abc' }))
+    act(() => setUi({ leaveOpen: false, incomingLink: 'cinemesh://join/abc' }))
     await flush()
     expect(byRole(m.container, 'dialog', 'Join another room?')).toBeTruthy()
     expectNoLoop()

@@ -48,7 +48,7 @@ exports[`buildMpvArgs > mpv 0.39.0 on linux/wayland 1`] = `
   "--target-colorspace-hint=yes",
   "--hwdec=auto-safe",
   "--force-media-title=Movie.mkv",
-  "--wayland-app-id=watch-together-player",
+  "--wayland-app-id=cinemesh-player",
   "--log-file=/logs/mpv.log",
   "--input-ipc-client=fd://3",
 ]
@@ -102,7 +102,7 @@ exports[`buildMpvArgs > mpv 0.39.0 on linux/x11 1`] = `
   "--target-colorspace-hint=no",
   "--hwdec=auto-safe",
   "--force-media-title=Movie.mkv",
-  "--wayland-app-id=watch-together-player",
+  "--wayland-app-id=cinemesh-player",
   "--log-file=/logs/mpv.log",
   "--input-ipc-client=fd://3",
 ]
@@ -158,7 +158,7 @@ exports[`buildMpvArgs > mpv 0.40.0 on linux/wayland 1`] = `
   "--target-colorspace-hint=auto",
   "--hwdec=auto-safe",
   "--force-media-title=Movie.mkv",
-  "--wayland-app-id=watch-together-player",
+  "--wayland-app-id=cinemesh-player",
   "--log-file=/logs/mpv.log",
   "--input-ipc-client=fd://3",
 ]
@@ -214,7 +214,7 @@ exports[`buildMpvArgs > mpv 0.40.0 on linux/x11 1`] = `
   "--target-colorspace-hint=auto",
   "--hwdec=auto-safe",
   "--force-media-title=Movie.mkv",
-  "--wayland-app-id=watch-together-player",
+  "--wayland-app-id=cinemesh-player",
   "--log-file=/logs/mpv.log",
   "--input-ipc-client=fd://3",
 ]
@@ -327,7 +327,7 @@ exports[`buildMpvArgs > mpv 0.41.0 on linux/wayland 1`] = `
   "--target-colorspace-hint=auto",
   "--hwdec=auto-safe",
   "--force-media-title=Movie.mkv",
-  "--wayland-app-id=watch-together-player",
+  "--wayland-app-id=cinemesh-player",
   "--log-file=/logs/mpv.log",
   "--input-ipc-client=fd://3",
 ]

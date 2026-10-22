@@ -3,7 +3,7 @@
 - Date: 2026-10-22
 - Status: **record**. It covers the tree at `4cbdce9` (M0–M8 and spikes S1–S6). Update it when code moves away from
   the plan again. Rows marked **resolved** were closed after `4cbdce9` (§5).
-- Plan: `/home/ram/.claude/plans/eventual-leaping-catmull.md`, §2–§8
+- Plan: the original implementation plan (kept outside this repository), §2–§8
 - Sources:
   - ADRs 0001–0008;
   - the "Deviations from the plan" lists in `src/core/{net,media,player,sync}/README.md`;
@@ -30,9 +30,10 @@ window, the stream server, every drift-loop constant except `seekLat`, barrier t
 
 ### §2 Decisions and defaults
 
-| Plan says                                                                                | Code does                                                                                                                      | Why                                                                                 | Source            |
-| ---------------------------------------------------------------------------------------- | ------------------------------------------------------------------------------------------------------------------------------ | ----------------------------------------------------------------------------------- | ----------------- |
-| A forwarded `udpPort` turns RANDOM into OPEN or CONSISTENT; the hints suggest forwarding | A forward only turns CONSISTENT into OPEN. RANDOM is told to use a relay, and the relay is the default advice for RANDOM hosts | hyperdht never tests the forwarded port while the client socket's mapping is random | ADR 0005 §5, §6.2 |
+| Plan says                                                                                                   | Code does                                                                                                                                                                                                     | Why                                                                                 | Source            |
+| ----------------------------------------------------------------------------------------------------------- | ------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------- | ----------------------------------------------------------------------------------- | ----------------- |
+| A forwarded `udpPort` turns RANDOM into OPEN or CONSISTENT; the hints suggest forwarding                    | A forward only turns CONSISTENT into OPEN. RANDOM is told to use a relay, and the relay is the default advice for RANDOM hosts                                                                                | hyperdht never tests the forwarded port while the client socket's mapping is random | ADR 0005 §5, §6.2 |
+| The product is "Watch Together": scheme `watchtogether://`, appId `app.watchtogether.p2p`, relay `wt-relay` | The product is **Cinemesh**: scheme `cinemesh://`, appId and Linux desktop id `app.cinemesh`, package `cinemesh`, relay `cinemesh-relay`, torrent name `Cinemesh`, default save folder `<Downloads>/Cinemesh` | Renamed by the user before the first release                                        | **new**, §6 below |
 
 ### §4.1 Connectivity and rooms
 
@@ -201,3 +202,29 @@ Closed after `4cbdce9`, on 2026-10-22. Their rows above now say what the code do
    as a whole. Tests: `cachedManifest` unit tests, `test/integration/session/viewer-data.test.ts`.
 3. **Stale references (§6).** `host-transport.ts` names `--stdio-transport` and `src/core/index.test.ts` instead of
    `scripts/headless-peer.mjs`. The unit project no longer globs the absent `test/core/`.
+
+## 6. Rename to Cinemesh
+
+On 2026-10-22, before any release, the product was renamed from "Watch Together" to **Cinemesh**. The plan, ADRs
+0001–0008 and `spikes/` keep the old name; they are historical.
+
+- **Changed:**
+  - user-visible text: the Home heading, window and tray titles, dialogs, notices, the OSC, the invite text
+    (`Join "Friday" on Cinemesh`, `Join me on Cinemesh`), the default room name, the licence notices and the docs;
+  - packaging: `productName` (so Electron's userData folder is now `Cinemesh`) and the installer, uninstaller and
+    asset names (`Cinemesh-Setup-<v>.exe`, `Cinemesh.app`, `cinemesh_<v>_amd64.deb`, …);
+  - identifiers: package `cinemesh`, appId and `LINUX_APP_ID` `app.cinemesh` (`app.cinemesh.desktop`), the scheme
+    `cinemesh://` (electron-builder `protocols`, `build/installer.nsh`, `setAsDefaultProtocolClient`,
+    `x-scheme-handler/cinemesh`), the torrent info name `Cinemesh`, mpv's `--wayland-app-id=cinemesh-player`, and the
+    relay package, binary and systemd unit `cinemesh-relay`;
+  - the `cinemesh:` tag on our comments in `patches/*.patch`.
+- **Kept, as internal codenames nobody sees:** the `wt`/`wtp` prefixes. That covers the `wt-core` service name,
+  `wt-osc.lua` and its `wt_osc` client name, the `wtp/...` protocol and topic labels, the `WT_*` environment
+  variables, the `.wt-partial` folder and `wt_` identifiers. Renaming the protocol and topic labels would change the
+  wire and the swarm topics for no user benefit, and the rest is internal.
+- **Kept until the user picks the real repository:** the placeholder GitHub URLs (`DOWNLOAD_URL` in
+  `src/core/net/invite.ts`, `homepage` in `electron-builder.yml`, the tracker in
+  `resources/licenses/mpv/SOURCE-OFFER.md`, the relay README and unit). `docs/RELEASING.md` lists them.
+- **Not migrated:** old `watchtogether://` links do not open the app, and settings, recent rooms and logs in the old
+  `Watch Together` userData folder (and partial downloads under `<Downloads>/Watch Together`) are not picked up.
+  There are no released users.

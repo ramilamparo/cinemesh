@@ -1,19 +1,19 @@
 {
-  "name": "wt-relay",
+  "name": "cinemesh-relay",
   "version": "0.1.0",
   "private": true,
-  "description": "Blind UDP relay for Watch Together members whose NATs cannot reach each other",
+  "description": "Blind UDP relay for Cinemesh members whose NATs cannot reach each other",
   "license": "MIT",
   "type": "module",
   "main": "./src/index.js",
   "types": "./src/index.d.ts",
   "bin": {
-    "wt-relay": "./bin.js"
+    "cinemesh-relay": "./bin.js"
   },
   "files": [
     "bin.js",
     "src",
-    "wt-relay.service",
+    "cinemesh-relay.service",
     "README.md"
   ],
   "engines": {

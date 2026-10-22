@@ -27,7 +27,7 @@ test.afterAll(async () => {
 
 test('boots to Home and connects to core', async () => {
   const page = await app.firstWindow()
-  await expect(page.getByRole('heading', { name: 'Watch together' })).toBeVisible()
+  await expect(page.getByRole('heading', { name: 'Cinemesh' })).toBeVisible()
   await expect(page.getByTestId('core-status')).toContainText('Background process connected')
 })
 

@@ -51,7 +51,7 @@
   rows 2 and 9). ADR 0004 §7 (the reload-path follow-up, Finding 10).
 - Spike: `spikes/s6-lite/`. Its README has every command; §8 has the re-run for a quiet period.
 - Raw data: kept outside the repo, in the session scratchpad
-  (`/tmp/claude-1000/-home-ram-Documents-projects-watch-together-p2p/2544c560-b9a2-48b1-83d4-60348e2ead8d/scratchpad/s6/`):
+  (not published):
   - `main/` holds 5 contended runs (2026-10-19), and `quiet/` 1 quiet run (the night of 2026-10-19).
   - `final/` holds the 2026-10-20 matrix (one repetition), the socket run, the e2e starts (`e2e.md`, `e2e6.md`) and
     the probes (`probe-*.md`).
@@ -616,8 +616,8 @@ Everything above, in a quiet period (~75 min). Each run takes the shared measure
 other items' measurements:
 
 ```sh
-cd /home/ram/Documents/projects/watch-together-p2p
-S6_LOCK=/tmp/claude-1000/-home-ram-Documents-projects-watch-together-p2p/2544c560-b9a2-48b1-83d4-60348e2ead8d/scratchpad/measure.lock \
+cd cinemesh
+S6_LOCK=/path/to/measure.lock \
   spikes/s6-lite/run-all.sh /tmp/s6-quiet 2
 cat /tmp/s6-quiet/summary.md /tmp/s6-quiet/e2e.md /tmp/s6-quiet/probe-*.md
 ```

@@ -67,14 +67,14 @@ describe('App routing', () => {
   })
 
   it.each<[ScenarioName, string]>([
-    ['home', 'Watch together'],
+    ['home', 'Cinemesh'],
     ['preparing', 'Preparing to host'],
     ['connecting', 'Connecting to the room'],
     ['pending', 'Waiting for the host to let you in'],
     ['confirm-join', 'Join this room?'],
     ['room-viewer', fx.FILE.name],
     ['ended-host', 'The video has ended'],
-    ['mpv-missing', 'Watch Together needs mpv'],
+    ['mpv-missing', 'Cinemesh needs mpv'],
     ['mpv-too-old', 'Your mpv is too old'],
     ['error', 'Something went wrong'],
   ])('scenario %s shows "%s"', async (scenario, heading) => {

@@ -37,7 +37,7 @@ describe('JoinConfirm', () => {
     expect(text(m.container)).toContain('120 GB')
     expect(queryByRole(m.container, 'alert')).toBeNull()
     await click(byRole(m.container, 'button', /^Join$/))
-    expect(callsOf(m.fake, 'session.confirmJoin')).toEqual([{ dir: '/home/alex/Downloads/Watch Together' }])
+    expect(callsOf(m.fake, 'session.confirmJoin')).toEqual([{ dir: '/home/alex/Downloads/Cinemesh' }])
   })
 
   it('blocks joining when the drive is too small, until another folder is picked', async () => {

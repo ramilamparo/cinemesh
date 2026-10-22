@@ -5,7 +5,7 @@ const CODE = 'ybndrfg8ejkmcpqxot1uwisza345h769'.repeat(4).slice(0, 109)
 
 describe('invite links', () => {
   it('finds a link inside chat text, case-insensitively, without swallowing the next word', () => {
-    expect(extractInvite(`Join us! WatchTogether://join/${CODE.toUpperCase()} see you`)).toBe(inviteLink(CODE))
+    expect(extractInvite(`Join us! CineMesh://join/${CODE.toUpperCase()} see you`)).toBe(inviteLink(CODE))
   })
 
   it('joins a code wrapped across lines only when asked (paste box)', () => {
@@ -20,7 +20,7 @@ describe('invite links', () => {
 
   it('ignores text without an invite', () => {
     expect(extractInvite('hello there')).toBeNull()
-    expect(extractInvite('watchtogether://join/short')).toBeNull()
+    expect(extractInvite('cinemesh://join/short')).toBeNull()
   })
 
   it('round-trips link and code', () => {

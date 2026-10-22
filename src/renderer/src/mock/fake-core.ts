@@ -604,6 +604,6 @@ function inviteResult(): { invite: string; link: string; text: string } {
   return {
     invite: fx.INVITE,
     link: fx.INVITE,
-    text: `Join me on Watch Together to watch ${fx.FILE.name}:\n${fx.INVITE}\n\nNo app yet? https://example.invalid/download`,
+    text: `Join me on Cinemesh to watch ${fx.FILE.name}:\n${fx.INVITE}\n\nNo app yet? https://example.invalid/download`,
   }
 }

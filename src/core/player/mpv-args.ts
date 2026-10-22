@@ -86,7 +86,7 @@ export function buildMpvArgs(input: MpvArgsInput): string[] {
   if (settings.alang.length > 0) args.push(`--alang=${settings.alang.join(',')}`)
   if (settings.slang.length > 0) args.push(`--slang=${settings.slang.join(',')}`)
   if (input.mediaTitle !== null) args.push(`--force-media-title=${input.mediaTitle}`)
-  if (input.os === 'linux') args.push('--wayland-app-id=watch-together-player')
+  if (input.os === 'linux') args.push('--wayland-app-id=cinemesh-player')
   if (input.logFile !== null) args.push(`--log-file=${input.logFile}`)
   args.push(input.ipc.mode === 'fd' ? '--input-ipc-client=fd://3' : `--input-ipc-server=${input.ipc.path}`)
   return args

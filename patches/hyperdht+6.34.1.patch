@@ -6,7 +6,7 @@ index 8a3f0db..15c704b 100644
    const { error, firewall, punching, addresses, remoteToken } = remotePayload
  
    if (error === ERROR.TRY_LATER && c.relayToken && payload.punching) {
-+    // watch-together: keep this round's address verification. The delayed round sends no token, and _punch()
++    // cinemesh: keep this round's address verification. The delayed round sends no token, and _punch()
 +    // refuses a RANDOM remote without a verified address, so a relayed link never upgraded (ADR 0005 Finding 9).
 +    if (remoteToken && payload.token && b4a.equals(remoteToken, payload.token)) {
 +      c.puncher.updateRemote({ punching, firewall, addresses, verified: peerAddress.host })

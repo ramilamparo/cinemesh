@@ -70,7 +70,7 @@ describe('saveFile with names from an untrusted torrent', () => {
     const names = ['film.mkv.exe', '../../escaped.srt', '..\\..\\AppData\\evil.srt', 'CON.srt', 'a:b.srt', '..']
     const bodies = names.map((n, i) => Buffer.alloc(100 + i, i + 1))
     const info = {
-      name: 'WatchTogether',
+      name: 'Cinemesh',
       files: names.map((n, i) => ({ length: bodies[i]?.length ?? 0, path: [n] })),
       'piece length': S,
       pieces: Buffer.alloc(20),
@@ -205,7 +205,7 @@ async function download(): Promise<{ dir: string; destDir: string; infoHash: str
   for (let k = 0; k * S < all.length; k++)
     writeFileSync(join(dir, 'seg', segmentName(k)), all.subarray(k * S, (k + 1) * S))
   const info = {
-    name: 'WatchTogether',
+    name: 'Cinemesh',
     files: LAYOUT.map((f) => ({ length: f.length, path: [f.name] })),
     'piece length': P,
     pieces: Buffer.alloc(20 * PIECES),

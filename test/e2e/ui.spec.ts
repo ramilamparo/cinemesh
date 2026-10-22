@@ -34,7 +34,7 @@ const savedSettings = (): Record<string, unknown> =>
   JSON.parse(readFileSync(join(userData, 'settings.json'), 'utf8')) as Record<string, unknown>
 
 test('boots to Home with the core connected', async () => {
-  await expect(page.getByRole('heading', { name: 'Watch together' })).toBeVisible()
+  await expect(page.getByRole('heading', { name: 'Cinemesh' })).toBeVisible()
   await expect(page.getByTestId('core-status')).toContainText('Background process connected')
   await expect(page.getByRole('region', { name: 'Join a room' })).toBeVisible()
 })
@@ -166,7 +166,7 @@ test('hosting, then ending the room: the Room locks while leaving, then Home', a
       .getByRole('dialog', { name: 'Leave the room?' })
       .getByRole('button', { name: 'End room for everyone' })
       .click()
-    await expect(p.getByRole('heading', { name: 'Watch together' })).toBeVisible({ timeout: 30_000 })
+    await expect(p.getByRole('heading', { name: 'Cinemesh' })).toBeVisible({ timeout: 30_000 })
 
     const seen = await p.evaluate(() => (window as unknown as { leavingSeen?: LeavingSeen }).leavingSeen ?? null)
     // what runs: the window asked to end the room (core's 'leaving' event says 'end' as well)

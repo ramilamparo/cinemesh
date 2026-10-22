@@ -4,7 +4,7 @@ import { app } from 'electron'
 import { INVITE_SCHEME, extractInvite } from '../shared/invite-link.js'
 
 /**
- * Collects watchtogether:// links from every OS entry point and queues them until the renderer asks.
+ * Collects cinemesh:// links from every OS entry point and queues them until the renderer asks.
  * macOS delivers them through 'open-url' (possibly before 'ready'); Windows and Linux through argv,
  * either at first launch or via 'second-instance'.
  */

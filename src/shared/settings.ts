@@ -21,7 +21,7 @@ export const SettingsSchema = z.object({
   version: z.literal(1).default(1),
   theme: z.enum(THEME_MODES).default('system'),
   displayName: z.string().trim().min(1).max(32).default('Friend'),
-  // null means <Downloads>/Watch Together
+  // null means <Downloads>/Cinemesh
   downloadDir: z.string().min(1).nullable().default(null),
   cacheCapGB: z.number().int().min(1).max(100_000).default(100),
   mpvPath: z.string().min(1).nullable().default(null),

@@ -6,7 +6,7 @@ import { dirname, join } from 'node:path'
 import { INVITE_SCHEME } from '../shared/invite-link.js'
 import { type Result, err, ok } from '../shared/result.js'
 
-// AppImages are not installed, so nothing tells the desktop that they handle watchtogether:// links. Settings
+// AppImages are not installed, so nothing tells the desktop that they handle cinemesh:// links. Settings
 // offers an opt-in "Register invite links" that writes a user-level .desktop entry pointing at the AppImage
 // and makes it the default handler (plan §4.6). Packaged deb/rpm/pacman builds ship their own entry.
 
@@ -16,7 +16,7 @@ const execFileAsync = promisify(execFile)
  * The app's Linux identity: Electron's desktop name (Wayland app_id, X11 WM_CLASS) and the .desktop file name, so
  * windows are associated with their launcher entry. electron-builder.yml sets the same value as desktopName.
  */
-export const LINUX_APP_ID = 'app.watchtogether.p2p'
+export const LINUX_APP_ID = 'app.cinemesh'
 /** The AppImage's user-level entry; named like the packaged one so the desktop matches it to the app_id. */
 export const DESKTOP_FILE = `${LINUX_APP_ID}.desktop`
 export const SCHEME_MIME = `x-scheme-handler/${INVITE_SCHEME}`
@@ -58,14 +58,14 @@ export function desktopEntry(appImage: string): string {
   return [
     '[Desktop Entry]',
     'Type=Application',
-    'Name=Watch Together',
+    'Name=Cinemesh',
     'Comment=Watch a local video in sync with friends',
     `Exec=${quoteExecArg(appImage)} %U`,
     'Terminal=false',
     'Categories=AudioVideo;Video;Network;',
     `MimeType=${SCHEME_MIME};`,
     `StartupWMClass=${LINUX_APP_ID}`,
-    `X-WatchTogether-AppImage=${appImage}`,
+    `X-Cinemesh-AppImage=${appImage}`,
     '',
   ].join('\n')
 }
@@ -95,7 +95,7 @@ export async function linuxDeepLinkStatus(
   if (process.platform !== 'linux' || !deps.appImage) return 'unsupported'
   try {
     const text = await readFile(join(deps.dataHome, 'applications', DESKTOP_FILE), 'utf8')
-    return text.includes(`X-WatchTogether-AppImage=${deps.appImage}\n`) ? 'registered' : 'stale'
+    return text.includes(`X-Cinemesh-AppImage=${deps.appImage}\n`) ? 'registered' : 'stale'
   } catch {
     return 'unregistered'
   }

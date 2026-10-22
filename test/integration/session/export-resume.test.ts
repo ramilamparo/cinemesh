@@ -99,7 +99,7 @@ describe.skipIf(!HAVE_FFMPEG)('a save cut off by a quit finishes at the next sta
     exportSteps.after = null
     // (what a window still there would be told: the export carries on at the next start)
     expect(await saving).toBe(
-      'transfer.saveFile failed: save-failed Saving stopped before it was done; see the log. Choose Finish saving in Recent rooms, or it goes on the next time Watch Together starts.',
+      'transfer.saveFile failed: save-failed Saving stopped before it was done; see the log. Choose Finish saving in Recent rooms, or it goes on the next time Cinemesh starts.',
     )
     return quitMs
   }

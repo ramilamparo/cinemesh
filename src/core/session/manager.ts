@@ -306,7 +306,7 @@ export class SessionManager {
       this.rpc.noticeUntilSeen({
         level: 'warn',
         code: 'transfer.export-failed',
-        message: `Saving ${name} stopped: ${errorText(e)}. Choose Finish saving in Recent rooms to try again, or it goes on the next time Watch Together starts.`,
+        message: `Saving ${name} stopped: ${errorText(e)}. Choose Finish saving in Recent rooms to try again, or it goes on the next time Cinemesh starts.`,
         ...(p.roomIds[0]
           ? { action: { label: 'Finish saving', request: 'transfer.finishExport', params: { roomId: p.roomIds[0] } } }
           : {}),
@@ -984,7 +984,7 @@ export class SessionManager {
       'save-failed',
       saving.waiting
         ? `Saving stopped: ${saving.dest} is not there any more. Connect it, then choose Finish saving in Recent rooms.`
-        : 'Saving stopped before it was done; see the log. Choose Finish saving in Recent rooms, or it goes on the next time Watch Together starts.',
+        : 'Saving stopped before it was done; see the log. Choose Finish saving in Recent rooms, or it goes on the next time Cinemesh starts.',
     )
   }
 }

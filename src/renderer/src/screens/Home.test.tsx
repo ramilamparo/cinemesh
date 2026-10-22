@@ -14,7 +14,7 @@ import {
   typeInto,
 } from '../test/harness'
 
-const CODE = INVITE.slice('watchtogether://join/'.length)
+const CODE = INVITE.slice('cinemesh://join/'.length)
 
 describe('Home', () => {
   let m: Mounted | null = null
@@ -29,7 +29,7 @@ describe('Home', () => {
     const join = byRole(m.container, 'button', /^Join$/)
     expect(join.hasAttribute('disabled')).toBe(true)
 
-    await typeInto(box, `watchtogether://join/${CODE.slice(0, 50)}\n${CODE.slice(50)}`)
+    await typeInto(box, `cinemesh://join/${CODE.slice(0, 50)}\n${CODE.slice(50)}`)
     expect(join.hasAttribute('disabled')).toBe(false)
     expect(text(m.container)).toContain('Invite recognised')
 

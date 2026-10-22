@@ -76,7 +76,7 @@ const FULL_DOWNLOAD: NoticeEvent = {
 export function announceError(raw: unknown, issues: readonly { path: readonly PropertyKey[] }[]): CodedError {
   const v = typeof raw === 'object' && raw !== null ? (raw as { v?: unknown }).v : undefined
   if (typeof v === 'number' && v > 1) {
-    return new CodedError('update-required', 'The host uses a newer version of Watch Together. Update the app to join.')
+    return new CodedError('update-required', 'The host uses a newer version of Cinemesh. Update the app to join.')
   }
   const what = issues[0]?.path.map(String).join('.') || 'announce'
   return new CodedError(

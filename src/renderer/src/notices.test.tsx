@@ -82,7 +82,7 @@ describe('notices', () => {
         level: 'warn',
         code: 'transfer.export-failed',
         message: 'Saving the video failed.',
-        path: '/home/alex/Downloads/Watch Together/part.mkv',
+        path: '/home/alex/Downloads/Cinemesh/part.mkv',
         action: { label: 'Rejoin', request: 'session.resume', params: { roomId: fx.ROOM_ID } },
       }),
     )
@@ -155,7 +155,7 @@ describe('notices', () => {
   it("the browser mock's export-finished scenario sends both startup notices", () => {
     const sent = SCENARIO_NOTICES['export-finished']?.() ?? []
     expect(sent.map((n) => n.code)).toEqual(['transfer.export-resumed', 'transfer.export-finished'])
-    expect(sent[1]?.path).toBe(`/home/alex/Downloads/Watch Together/${fx.FILE.name}`)
+    expect(sent[1]?.path).toBe(`/home/alex/Downloads/Cinemesh/${fx.FILE.name}`)
   })
 
   it("the browser mock's recent-export-waiting scenario sends core's startup notice with Finish saving", () => {

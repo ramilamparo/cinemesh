@@ -6,7 +6,7 @@ index 0da42f7..6c0665e 100644
  
      this.userData = null
  
-+    // watch-together: bytes handed to _writev, and bytes of write requests acknowledged in full. The stream exposes
++    // cinemesh: bytes handed to _writev, and bytes of write requests acknowledged in full. The stream exposes
 +    // inflight but not its send queue: unsent = bytesWritten - bytesAcked - inflight (the host's upload scheduler)
 +    this.bytesWritten = 0
 +    this.bytesAcked = 0

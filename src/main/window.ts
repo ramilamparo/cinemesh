@@ -28,7 +28,7 @@ export function createMainWindow(theme: ThemePayload): BrowserWindow {
     minWidth: 720,
     minHeight: 520,
     show: false,
-    title: 'Watch Together',
+    title: 'Cinemesh',
     backgroundColor: theme.colors.bg,
     ...(process.platform === 'win32'
       ? {

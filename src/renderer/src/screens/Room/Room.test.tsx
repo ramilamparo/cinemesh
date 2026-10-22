@@ -394,7 +394,7 @@ describe('Room', () => {
     m = await mountApp('room-host')
     await click(byRole(m.container, 'button', 'Copy invite'))
     expect(m.fake.clipboard).toContain(fx.INVITE)
-    expect(m.fake.clipboard).toContain('Join me on Watch Together')
+    expect(m.fake.clipboard).toContain('Join me on Cinemesh')
   })
 
   it('leave prompt offers save, keep and delete to viewers', async () => {
@@ -486,7 +486,7 @@ describe('Room', () => {
     expect(text(toasts)).toContain(`Saved ${fx.FILE.name}`)
     await click(byRole(toasts, 'button', 'Show in folder'))
     expect(m.fake.appCalls.filter((c) => c.method === 'showItemInFolder').map((c) => c.params)).toEqual([
-      [`/home/alex/Downloads/Watch Together/${fx.FILE.name}`],
+      [`/home/alex/Downloads/Cinemesh/${fx.FILE.name}`],
     ])
   })
 

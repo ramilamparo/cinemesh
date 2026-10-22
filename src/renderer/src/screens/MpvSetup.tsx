@@ -46,7 +46,7 @@ export const LINUX_RECIPES: Recipe[] = [
     matches: [],
     label: 'Any distribution (Flatpak)',
     command: 'flatpak install flathub io.mpv.Mpv',
-    note: 'Works everywhere and is always recent. Watch Together finds it automatically.',
+    note: 'Works everywhere and is always recent. Cinemesh finds it automatically.',
   },
 ]
 
@@ -61,7 +61,7 @@ export function MpvSetup(): React.JSX.Element {
   const recheck = async (): Promise<void> => {
     const api = wt().app
     if (!api.recheckMpv) {
-      pushToast({ level: 'info', message: 'Restart Watch Together to look for mpv again.', code: 'mpv' })
+      pushToast({ level: 'info', message: 'Restart Cinemesh to look for mpv again.', code: 'mpv' })
       return
     }
     setChecking(true)
@@ -88,7 +88,7 @@ export function MpvSetup(): React.JSX.Element {
   return (
     <div className={styles.screen}>
       <header className={styles.screenHeader}>
-        <h1>{tooOld ? 'Your mpv is too old' : 'Watch Together needs mpv'}</h1>
+        <h1>{tooOld ? 'Your mpv is too old' : 'Cinemesh needs mpv'}</h1>
         <p className="muted">
           {tooOld
             ? `Found mpv ${player.version ?? '?'}; version ${MIN_MPV} or newer is needed for synced playback.`
@@ -142,7 +142,7 @@ export function MpvSetup(): React.JSX.Element {
         <section className="card stack" aria-labelledby="mpv-bundled">
           <h2 id="mpv-bundled">mpv is missing from this installation</h2>
           <p>
-            Watch Together ships its own mpv on {info?.platform === 'darwin' ? 'macOS' : 'Windows'}, but it could not be
+            Cinemesh ships its own mpv on {info?.platform === 'darwin' ? 'macOS' : 'Windows'}, but it could not be
             started. Reinstalling the app usually fixes this. You can also point to an mpv you installed yourself.
           </p>
         </section>

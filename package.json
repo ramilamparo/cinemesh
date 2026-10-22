@@ -1,6 +1,6 @@
 {
-  "name": "watch-together-p2p",
-  "productName": "Watch Together",
+  "name": "cinemesh",
+  "productName": "Cinemesh",
   "version": "0.1.0",
   "private": true,
   "description": "Watch a local video in sync with friends; the file is shared peer-to-peer",

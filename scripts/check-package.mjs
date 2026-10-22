@@ -5,7 +5,7 @@
 //            forbidden addon (node-datachannel, utp) ships; the fuses read back as electron-builder.yml sets them; the
 //            OSC script and licence notices are in resources/
 //   linux    no bundled mpv; `ldd` finds every library of the executable and of each addon; the deb and pacman packages
-//            carry the invite-link .desktop entry (MimeType=x-scheme-handler/watchtogether, Exec ... %U), the icons
+//            carry the invite-link .desktop entry (MimeType=x-scheme-handler/cinemesh, Exec ... %U), the icons
 //            and the mpv recommendation / dependency; the rpm's weak dependency when `rpm` is installed
 //   win/mac  the bundled mpv runs and reports the pinned version (scripts/mpv-assets.json)
 //   mac      codesign --verify --deep --strict passes and the nested mpv.app carries an ad-hoc signature
@@ -41,7 +41,7 @@ import { parseArgs } from 'node:util'
 const ROOT = resolve(import.meta.dirname, '..')
 const PKG = JSON.parse(readFileSync(join(ROOT, 'package.json'), 'utf8'))
 const MPV_VERSION = JSON.parse(readFileSync(join(import.meta.dirname, 'mpv-assets.json'), 'utf8')).version
-const SCHEME = 'watchtogether'
+const SCHEME = 'cinemesh'
 // Native addons that must never ship: WebTorrent's WebRTC and uTP paths are stubbed out (ADR 0001).
 const FORBIDDEN_ADDONS = /node[_-]datachannel|utp[_-]native|utp\.node/i
 // @electron/fuses: the wire follows this sentinel as <version byte><length byte><one state byte per fuse>.

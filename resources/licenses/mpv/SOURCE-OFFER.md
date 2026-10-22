@@ -1,7 +1,7 @@
 # mpv: licence and source code offer
 
-The Windows and macOS packages of Watch Together include **mpv 0.41.0**, which Watch Together starts as a separate
-program; mpv is not linked into Watch Together. mpv and the libraries in these builds are free software. This file
+The Windows and macOS packages of Cinemesh include **mpv 0.41.0**, which Cinemesh starts as a separate
+program; mpv is not linked into Cinemesh. mpv and the libraries in these builds are free software. This file
 says which builds we ship, which licence covers them, where their exact source code is, and how to get a copy from us.
 Linux packages include no mpv: they use the mpv from your distribution or Flatpak.
 
@@ -26,14 +26,14 @@ All three are the mpv project's own builds (first-party GitHub CI builds), publi
 | Package     | Where it is in the installed app                        | Upstream file                            | SHA-256 of the upstream file                                       |
 | ----------- | ------------------------------------------------------- | ---------------------------------------- | ------------------------------------------------------------------ |
 | Windows x64 | `resources\mpv\` (`mpv.exe`, `mpv.com`, `vulkan-1.dll`) | `mpv-v0.41.0-x86_64-pc-windows-msvc.zip` | `4e197f729f5071c6772f35fffd96e0f36e3e8a044bd9479b136bb09b7c6a80ff` |
-| macOS arm64 | `Watch Together.app/Contents/Resources/mpv/mpv.app`     | `mpv-v0.41.0-macos-14-arm.zip`           | `5c96f9b21355fc0a11d2e2161ad65f33031070e9fb3f6bd9865fb459b94587e6` |
-| macOS x64   | `Watch Together.app/Contents/Resources/mpv/mpv.app`     | `mpv-v0.41.0-macos-15-intel.zip`         | `41003617ab4f7784394b5ddea7ce51b3e0838e8cfc8166ad1a378b2eda3b583c` |
+| macOS arm64 | `Cinemesh.app/Contents/Resources/mpv/mpv.app`           | `mpv-v0.41.0-macos-14-arm.zip`           | `5c96f9b21355fc0a11d2e2161ad65f33031070e9fb3f6bd9865fb459b94587e6` |
+| macOS x64   | `Cinemesh.app/Contents/Resources/mpv/mpv.app`           | `mpv-v0.41.0-macos-15-intel.zip`         | `41003617ab4f7784394b5ddea7ce51b3e0838e8cfc8166ad1a378b2eda3b583c` |
 
 We do not modify the programs. We leave out the Windows debug symbols (`mpv.pdb`) and the `mpv-register.bat` /
 `mpv-unregister.bat` scripts, drop two empty `.gitkeep` placeholder files (and their AppleDouble `._.gitkeep`
 metadata files) from the macOS bundle, and the macOS bundle is re-signed with an ad-hoc signature when the app is
 packaged. `scripts/fetch-mpv.mjs` and `scripts/mpv-assets.json`
-in the Watch Together source do exactly this.
+in the Cinemesh source do exactly this.
 
 ## Corresponding source
 
@@ -41,7 +41,7 @@ in the Watch Together source do exactly this.
 
 - Source tarball: <https://github.com/mpv-player/mpv/archive/refs/tags/v0.41.0.tar.gz>
   (SHA-256 `ee21092a5ee427353392360929dc64645c54479aefdb5babc5cfbb5fad626209`).
-- Every Watch Together release attaches a copy of this tarball as `mpv-0.41.0.tar.gz`.
+- Every Cinemesh release attaches a copy of this tarball as `mpv-0.41.0.tar.gz`.
 
 **Build scripts**: these are first-party builds, so the scripts are part of the same tag; there is no separate
 build-script repository.
@@ -83,7 +83,7 @@ libzmq and libzstd.
 
 ## Written offer
 
-For at least three years after we last distribute a Watch Together release that contains mpv, we will give anyone
+For at least three years after we last distribute a Cinemesh release that contains mpv, we will give anyone
 who asks a complete, machine-readable copy of the corresponding source code of that release's mpv build (mpv, every
 library in it, and the scripts used to build it), by download or on a medium customarily used for software
 interchange, for no more than our cost of physically performing the distribution. To ask, open an issue in the

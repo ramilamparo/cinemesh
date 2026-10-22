@@ -16,7 +16,7 @@ import { encodeCoverage } from '../lib/coverage'
 // Realistic payloads for the fake core. Times are performance.now() based, like core's monotonic clock.
 
 export const FILE = { name: 'Big.Buck.Bunny.2160p.HDR.mkv', size: 58_200_000_000, durationS: 5_400 }
-export const INVITE = 'watchtogether://join/' + 'ybndrfg8ejkmcpqxot1uwisza345h769'.repeat(4).slice(0, 112)
+export const INVITE = 'cinemesh://join/' + 'ybndrfg8ejkmcpqxot1uwisza345h769'.repeat(4).slice(0, 112)
 export const ROOM_ID = 'r-7f3k2'
 
 export type StateSlices = Omit<CoreSnapshot, 'versions'>
@@ -57,7 +57,7 @@ export const POOR_MP4: NonNullable<SessionEvent['media']> = {
 export const FMP4_FILE = { name: 'Concert.Recording.2024.mp4', size: 6_800_000_000, durationS: FILE.durationS }
 
 /** The folder chosen when joining (JoinConfirm's default); a save without `dest` goes there. */
-export const JOIN_DIR = '/home/alex/Downloads/Watch Together'
+export const JOIN_DIR = '/home/alex/Downloads/Cinemesh'
 
 const baseName = (path: string): string => path.split(/[\\/]/).pop() ?? path
 

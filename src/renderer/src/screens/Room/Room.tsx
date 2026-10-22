@@ -102,7 +102,7 @@ function LeavingBanner(): React.JSX.Element {
               ? 'Ending the room…'
               : 'Leaving the room…'}
         </strong>
-        {saving && <span className="muted">Keep Watch Together running until it is done.</span>}
+        {saving && <span className="muted">Keep Cinemesh running until it is done.</span>}
       </span>
     </div>
   )

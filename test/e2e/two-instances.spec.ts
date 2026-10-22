@@ -38,7 +38,7 @@ async function launch(name: string, bootstrap: string): Promise<Instance> {
   apps.push(app)
   const page = await app.firstWindow()
   await expect(page.getByTestId('core-status')).toContainText('Background process connected')
-  // a private download folder: the default is the real ~/Downloads/Watch Together
+  // a private download folder: the default is the real ~/Downloads/Cinemesh
   await page.evaluate(
     ([n, dir]) => (window as unknown as { wt: WtBridge }).wt.app.setSettings({ displayName: n, downloadDir: dir }),
     [name, join(userData, 'downloads')] as const,

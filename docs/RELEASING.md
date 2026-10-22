@@ -10,7 +10,7 @@ not code bugs; they are decisions, accounts or legal work that the build cannot 
    - `src/core/net/invite.ts` (`DOWNLOAD_URL`, which goes into every copied invite);
    - `electron-builder.yml` (`extraMetadata.homepage`, which deb, rpm and pacman require);
    - `resources/licenses/mpv/SOURCE-OFFER.md` (the issue link of the written offer);
-   - `packages/relay/README.md` and `packages/relay/wt-relay.service`.
+   - `packages/relay/README.md` and `packages/relay/cinemesh-relay.service`.
 
    Replace them together. `linux.maintainer` in `electron-builder.yml` also has no contact address yet.
 
@@ -43,7 +43,7 @@ not code bugs; they are decisions, accounts or legal work that the build cannot 
 
 5. **Run CI once on GitHub.**
    - `ci.yml` and `release.yml` pass actionlint and shellcheck, but have never run on real runners.
-   - Not yet exercised: the Windows NSIS install and uninstall (HKCU `watchtogether` registration), macOS ad-hoc
+   - Not yet exercised: the Windows NSIS install and uninstall (HKCU `cinemesh` registration), macOS ad-hoc
      signing with `codesign --verify --deep --strict` on the app, zip and DMG, the Nix mpv 0.39/0.40 jobs, and the
      Arch integration container.
 

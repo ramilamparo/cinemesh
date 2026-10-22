@@ -71,7 +71,7 @@ export function viewerRecord(invite: Invite, existing: RoomRecord | null, now = 
     secret,
     hostKey,
     ...(invite.relayKey ? { relayKey: toHex(invite.relayKey) } : {}),
-    name: invite.name || existing?.name || 'Watch Together',
+    name: invite.name || existing?.name || 'Cinemesh',
     keySeed: existing?.keySeed ?? toHex(randomBytes(32)),
     role: existing?.role === 'host' ? 'host' : 'viewer',
     inviteEpoch: keepEpoch ? existing.inviteEpoch : 0,

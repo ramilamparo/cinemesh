@@ -6,7 +6,7 @@ export function TitleBar(): React.JSX.Element {
   const settingsOpen = useApp((s) => s.ui.settingsOpen)
   return (
     <header className={styles.bar}>
-      <span className={styles.title}>Watch Together</span>
+      <span className={styles.title}>Cinemesh</span>
       <button
         type="button"
         className={styles.action}

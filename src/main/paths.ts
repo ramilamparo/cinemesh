@@ -25,5 +25,5 @@ export function resourcesDir(): string {
 }
 
 export function defaultDownloadDir(): string {
-  return join(app.getPath('downloads'), 'Watch Together')
+  return join(app.getPath('downloads'), 'Cinemesh')
 }

@@ -100,10 +100,10 @@ export class AppTray {
     const tray = this.tray
     if (!tray) return
     const { inRoom, title } = this.session
-    tray.setToolTip(inRoom && title ? `Watch Together · ${title}` : 'Watch Together')
+    tray.setToolTip(inRoom && title ? `Cinemesh · ${title}` : 'Cinemesh')
     tray.setContextMenu(
       Menu.buildFromTemplate([
-        { label: 'Show Watch Together', click: () => this.show() },
+        { label: 'Show Cinemesh', click: () => this.show() },
         { label: 'Leave room…', enabled: inRoom, click: () => this.command('leave') },
         { label: 'Settings…', click: () => this.command('open-settings') },
         { type: 'separator' },
@@ -118,7 +118,7 @@ export class AppTray {
     this.hiddenHintShown = true
     this.tray.displayBalloon({
       title: 'Still in the room',
-      content: 'Watch Together keeps running here. Use Quit to leave.',
+      content: 'Cinemesh keeps running here. Use Quit to leave.',
       iconType: 'info',
     })
   }
@@ -146,7 +146,7 @@ export async function confirmQuitInRoom(win: BrowserWindow | null, opts: { savin
         cancelId: 1,
         title: 'Saving the video',
         message: 'Quit while the video is being saved?',
-        detail: 'Saving finishes the next time you open Watch Together.',
+        detail: 'Saving finishes the next time you open Cinemesh.',
       }
     : {
         type: 'question' as const,

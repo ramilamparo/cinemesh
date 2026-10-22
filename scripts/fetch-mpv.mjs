@@ -206,7 +206,7 @@ async function fetchWithRetry(url, label, size, attempts = 3) {
       log(label, `downloading ${url}${size ? ` (${mib(size)})` : ''}${of}`)
       const res = await fetch(url, {
         redirect: 'follow',
-        headers: { 'user-agent': 'watch-together-fetch-mpv' },
+        headers: { 'user-agent': 'cinemesh-fetch-mpv' },
         signal: AbortSignal.timeout(15 * 60_000),
       })
       if (!res.ok) {

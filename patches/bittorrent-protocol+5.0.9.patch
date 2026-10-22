@@ -6,12 +6,12 @@ index d34827a..80ff2b2 100644
  
      this.requests = [] // outgoing
      this.peerRequests = [] // incoming
-+    // watch-together: with holdRequests set (before the first request comes in), a request is not answered at once.
++    // cinemesh: with holdRequests set (before the first request comes in), a request is not answered at once.
 +    // It waits in heldRequests, announced by 'request-held', until releaseRequest() answers it as _onRequest would
 +    // have, or refuseRequest() turns it down. A cancel drops it, a choke rejects it (BEP 6), a close clears them.
 +    this.holdRequests = false
 +    this.heldRequests = []
-+    // watch-together: every byte pushed to the readable side, i.e. queued towards the connection
++    // cinemesh: every byte pushed to the readable side, i.e. queued towards the connection
 +    this.pushedBytes = 0
  
      this.extendedMapping = {} // number -> string, ex: 1 -> 'ut_metadata'
@@ -21,7 +21,7 @@ index d34827a..80ff2b2 100644
        }
      }
 +
-+    // watch-together: held requests are requests too. Without the fast extension the peer drops its own on a choke.
++    // cinemesh: held requests are requests too. Without the fast extension the peer drops its own on a choke.
 +    const held = this.heldRequests
 +    this.heldRequests = []
 +    for (const request of held) {
@@ -46,7 +46,7 @@ index d34827a..80ff2b2 100644
    }
  
 +  /**
-+   * watch-together: answer a held request (holdRequests) as _onRequest would have: 'request' with a respond
++   * cinemesh: answer a held request (holdRequests) as _onRequest would have: 'request' with a respond
 +   * callback. `onAnswered`, if given, runs once that callback ran, after the block (if any) was pushed.
 +   * @return {boolean} false when no such request is held (cancelled, rejected by a choke, or the wire closed)
 +   */
@@ -57,7 +57,7 @@ index d34827a..80ff2b2 100644
 +  }
 +
 +  /**
-+   * watch-together: turn a held request down: a reject (BEP 6) with the fast extension, else it goes unanswered.
++   * cinemesh: turn a held request down: a reject (BEP 6) with the fast extension, else it goes unanswered.
 +   * @return {boolean} false when no such request is held
 +   */
 +  refuseRequest (index, offset, length) {
@@ -75,7 +75,7 @@ index d34827a..80ff2b2 100644
      this._debug('extended ext=%s', ext)
 -    if (typeof ext === 'string' && this.peerExtendedMapping[ext]) {
 +    if (typeof ext === 'string') {
-+      // watch-together: a peer that did not announce an extension (or disabled it, id 0) cannot read its
++      // cinemesh: a peer that did not announce an extension (or disabled it, id 0) cannot read its
 +      // messages. Throwing here reached the parser: ut_metadata answers a request the peer sent anyway.
 +      if (!this.peerExtendedMapping[ext]) {
 +        this._debug('dropping %s message: the peer does not support it', ext)
@@ -130,7 +130,7 @@ index d34827a..80ff2b2 100644
    _onCancel (index, offset, length) {
      this._debug('got cancel index=%d offset=%d length=%d', index, offset, length)
 -    this._pull(this.peerRequests, index, offset, length)
-+    // watch-together: a held request is dropped, unanswered
++    // cinemesh: a held request is dropped, unanswered
 +    if (!this._pullHeld(index, offset, length)) this._pull(this.peerRequests, index, offset, length)
      this.emit('cancel', index, offset, length)
    }
@@ -140,7 +140,7 @@ index d34827a..80ff2b2 100644
        if (typeof info.m === 'object') {
          for (const name in info.m) {
 -          this.peerExtendedMapping[name] = Number(info.m[name].toString())
-+          // watch-together: BEP 10 ids are integers, 0 = not supported. Number(value.toString()) threw out of
++          // cinemesh: BEP 10 ids are integers, 0 = not supported. Number(value.toString()) threw out of
 +          // the parser for a dict with its own 'toString' key, and kept ids over 255 that no message can carry.
 +          const id = info.m[name]
 +          this.peerExtendedMapping[name] = Number.isInteger(id) && id >= 0 && id <= 255 ? id : 0
@@ -167,7 +167,7 @@ index d34827a..80ff2b2 100644
    }
  
 +  /**
-+   * watch-together: an extension's handler, run on what the peer sent. One that throws (ut_metadata reads
++   * cinemesh: an extension's handler, run on what the peer sent. One that throws (ut_metadata reads
 +   * msg_type from the null bencode returns for an empty message) threw out of the parser: an uncaught exception
 +   * in the core, sent at will by any room member. The wire is dropped instead.
 +   */
@@ -181,7 +181,7 @@ index d34827a..80ff2b2 100644
 +    }
 +  }
 +
-+  /** watch-together: the peer sent what we cannot parse past: drop what is buffered, parse nothing more, close. */
++  /** cinemesh: the peer sent what we cannot parse past: drop what is buffered, parse nothing more, close. */
 +  _drop (...reason) {
 +    reason[0] = 'Error: ' + reason[0]
 +    this._debug(...reason)
@@ -201,7 +201,7 @@ index d34827a..80ff2b2 100644
 -    this._bufferSize += data.length
 -    this._buffer.push(data)
 -    if (this._buffer.length > 1) {
-+    // watch-together: joining the whole buffer on every write is quadratic when a message trickles in as
++    // cinemesh: joining the whole buffer on every write is quadratic when a message trickles in as
 +    // tiny (or empty) writes. Join only once the parser can run (or the pattern search needs one buffer),
 +    // or when the chunk list outgrows ~1 per KiB buffered, which bounds the cost at ~1 KiB per write.
 +    if (data.length > 0) {
@@ -227,7 +227,7 @@ index d34827a..80ff2b2 100644
     */
    _onMessageLength (buffer) {
      const length = getUint32(buffer)
-+    // watch-together: our peers only send 16 KiB blocks, bitfields and small extension messages; a huge
++    // cinemesh: our peers only send 16 KiB blocks, bitfields and small extension messages; a huge
 +    // length prefix would make us buffer (and re-concatenate) up to 4 GiB from a malicious member.
 +    if (length > 1048576) {
 +      this._drop('message of %d bytes exceeds the 1 MiB limit', length) // the framing is lost
@@ -248,7 +248,7 @@ index d34827a..80ff2b2 100644
      debug(...args)
    }
  
-+  // watch-together: _pull's unordered remove would reorder the held requests, which wait in arrival order
++  // cinemesh: _pull's unordered remove would reorder the held requests, which wait in arrival order
 +  _pullHeld (piece, offset, length) {
 +    const requests = this.heldRequests
 +    for (let i = 0; i < requests.length; i++) {

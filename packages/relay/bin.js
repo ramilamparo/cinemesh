@@ -1,6 +1,6 @@
 #!/usr/bin/env node
-// wt-relay: run a blind relay for Watch Together. Prints its key; paste it into Settings → Relay.
-//   wt-relay [--port 49737] [--host 0.0.0.0] [--seed-file PATH] [--bootstrap host:port,...] [--stats-interval 60]
+// cinemesh-relay: run a blind relay for Cinemesh. Prints its key; paste it into Settings → Relay.
+//   cinemesh-relay [--port 49737] [--host 0.0.0.0] [--seed-file PATH] [--bootstrap host:port,...] [--stats-interval 60]
 import { Buffer } from 'node:buffer'
 import { randomBytes } from 'node:crypto'
 import { chmodSync, existsSync, mkdirSync, readFileSync, writeFileSync } from 'node:fs'
@@ -23,7 +23,7 @@ const { values: args } = parseArgs({
 
 if (args.help) {
   process.stdout.write(
-    'usage: wt-relay [--port 49737] [--host 0.0.0.0] [--seed-file PATH] [--bootstrap host:port,...] [--stats-interval 60]\n',
+    'usage: cinemesh-relay [--port 49737] [--host 0.0.0.0] [--seed-file PATH] [--bootstrap host:port,...] [--stats-interval 60]\n',
   )
   process.exit(0)
 }

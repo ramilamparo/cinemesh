@@ -33,7 +33,7 @@ else void app.whenReady().then(main)
 
 async function main(): Promise<void> {
   setupMainLog()
-  log.info(`Watch Together ${app.getVersion()} (Electron ${process.versions.electron}) starting`)
+  log.info(`Cinemesh ${app.getVersion()} (Electron ${process.versions.electron}) starting`)
   const settings = await SettingsStore.open(app.getPath('userData'))
   const theme = new ThemeController(settings.get().theme)
   const core = new CoreHost()

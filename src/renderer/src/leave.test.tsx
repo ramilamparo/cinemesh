@@ -24,7 +24,7 @@ import {
 // session.leave / transfer.saveFile: phase 'leaving' keeps the screen the leave started on, locked, with a
 // banner; one leave at a time; the saved path (or why saving failed) once core answers.
 
-const SAVED = `/home/alex/Downloads/Watch Together/${fx.FILE.name}`
+const SAVED = `/home/alex/Downloads/Cinemesh/${fx.FILE.name}`
 
 /** A request handler that stays open until `release()`, as a long 'save' export does. */
 function gate(): { wait: Promise<void>; release: () => void } {
@@ -451,7 +451,7 @@ describe('what the leaving banner says (SessionEvent.leave)', () => {
     await flush()
     const status = byRole(m.container, 'status', banner)
     expect(text(status)).toContain(banner)
-    expect(text(status).includes('Keep Watch Together running')).toBe(leave === 'save')
+    expect(text(status).includes('Keep Cinemesh running')).toBe(leave === 'save')
   })
 
   it('a window reloaded mid-save still says Saving the video…, from the snapshot alone', async () => {

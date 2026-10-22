@@ -29,7 +29,7 @@ export async function runSelftest(userData: string, mpv: MpvInfo): Promise<Selft
   await check('sodium-native', async () => {
     const sodium = (await import('sodium-native')).default
     const out = Buffer.alloc(32)
-    sodium.crypto_generichash(out, Buffer.from('watch-together'))
+    sodium.crypto_generichash(out, Buffer.from('cinemesh'))
     return out.toString('hex').slice(0, 16)
   })
 
@@ -48,7 +48,7 @@ export async function runSelftest(userData: string, mpv: MpvInfo): Promise<Selft
       // seeding exercises metadata, the chunk store and torrent-discovery with every source off
       const torrent = await new Promise<{ infoHash: string }>((resolve, reject) => {
         client.once('error', reject)
-        client.seed(Buffer.from('watch-together selftest'), { name: 'selftest.bin', private: true }, resolve)
+        client.seed(Buffer.from('cinemesh selftest'), { name: 'selftest.bin', private: true }, resolve)
       })
       return `listening without ConnPool; seeded ${torrent.infoHash.slice(0, 8)}`
     } finally {

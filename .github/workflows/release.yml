@@ -86,7 +86,7 @@ jobs:
           sudo apt-get install -y --no-install-recommends minisign
           key="$RUNNER_TEMP/minisign.key"
           (umask 077 && printf '%s\n' "$MINISIGN_SECRET_KEY" > "$key")
-          minisign -S -s "$key" -m dist/SHA256SUMS -t "Watch Together $TAG" < /dev/null
+          minisign -S -s "$key" -m dist/SHA256SUMS -t "Cinemesh $TAG" < /dev/null
           rm -f "$key"
       - name: Release notes
         env:
@@ -94,15 +94,15 @@ jobs:
         run: |
           v="${TAG#v}"
           cat > "$RUNNER_TEMP/notes.md" <<EOF
-          These builds are not code-signed. [Installing Watch Together]($INSTALL_DOC) shows how to open them on
+          These builds are not code-signed. [Installing Cinemesh]($INSTALL_DOC) shows how to open them on
           macOS (Open Anyway) and Windows (SmartScreen: More info, then Run anyway).
 
           | System | Download |
           | --- | --- |
-          | Windows 10/11 (x64) | \`Watch-Together-Setup-$v.exe\` (installer) or \`Watch-Together-$v-win.zip\` |
-          | Mac with Apple silicon | \`Watch-Together-$v-mac-arm64.dmg\` (or \`.zip\`) |
-          | Mac with an Intel processor | \`Watch-Together-$v-mac-x64.dmg\` (or \`.zip\`) |
-          | Linux (x64) | \`Watch-Together-$v.AppImage\`, \`watch-together-p2p_${v}_amd64.deb\`, \`watch-together-p2p-$v.x86_64.rpm\`, \`watch-together-p2p-$v.pacman\` |
+          | Windows 10/11 (x64) | \`Cinemesh-Setup-$v.exe\` (installer) or \`Cinemesh-$v-win.zip\` |
+          | Mac with Apple silicon | \`Cinemesh-$v-mac-arm64.dmg\` (or \`.zip\`) |
+          | Mac with an Intel processor | \`Cinemesh-$v-mac-x64.dmg\` (or \`.zip\`) |
+          | Linux (x64) | \`Cinemesh-$v.AppImage\`, \`cinemesh_${v}_amd64.deb\`, \`cinemesh-$v.x86_64.rpm\`, \`cinemesh-$v.pacman\` |
 
           On Linux, install mpv 0.39 or newer, or the Flatpak \`io.mpv.Mpv\`. The Windows and macOS packages include
           mpv 0.41.0, which is GPL software: its source code is attached as \`mpv-0.41.0.tar.gz\`, and the app's
@@ -118,4 +118,4 @@ jobs:
           GH_TOKEN: ${{ github.token }}
         run: |
           gh release create "$TAG" dist/* --draft --verify-tag \
-            --title "Watch Together ${TAG#v}" --notes-file "$RUNNER_TEMP/notes.md"
+            --title "Cinemesh ${TAG#v}" --notes-file "$RUNNER_TEMP/notes.md"

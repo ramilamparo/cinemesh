@@ -212,32 +212,32 @@ jobs:
           tmp=$(mktemp -d)
           mkdir "$tmp/dmg"
           ditto -x -k "$zip" "$tmp/zip"
-          codesign --verify --deep --strict --verbose=2 "$tmp/zip/Watch Together.app"
+          codesign --verify --deep --strict --verbose=2 "$tmp/zip/Cinemesh.app"
           hdiutil attach -nobrowse -readonly -mountpoint "$tmp/dmg" "$dmg"
-          codesign --verify --deep --strict --verbose=2 "$tmp/dmg/Watch Together.app"
-          codesign -dv "$tmp/dmg/Watch Together.app/Contents/Resources/mpv/mpv.app" 2>&1 | grep -E '^(Identifier|Signature)='
+          codesign --verify --deep --strict --verbose=2 "$tmp/dmg/Cinemesh.app"
+          codesign -dv "$tmp/dmg/Cinemesh.app/Contents/Resources/mpv/mpv.app" 2>&1 | grep -E '^(Identifier|Signature)='
           hdiutil detach "$tmp/dmg"
       - name: Install, check the invite-link registration, uninstall (NSIS, per user)
         if: runner.os == 'Windows'
         shell: pwsh
         run: |
           $ErrorActionPreference = 'Stop'
-          $key = 'HKCU:\Software\Classes\watchtogether'
+          $key = 'HKCU:\Software\Classes\cinemesh'
           $setup = Get-ChildItem -Path release -Recurse -Filter '*Setup*.exe' | Select-Object -First 1
           $p = Start-Process -FilePath $setup.FullName -ArgumentList '/S', '/currentuser' -Wait -PassThru
           if ($p.ExitCode -ne 0) { throw "installer exited with $($p.ExitCode)" }
           $cmd = (Get-ItemProperty -Path "$key\shell\open\command").'(default)'
-          Write-Host "watchtogether:// -> $cmd"
+          Write-Host "cinemesh:// -> $cmd"
           if ($null -eq (Get-ItemProperty -Path $key).'URL Protocol') { throw 'URL Protocol value missing' }
-          if ($cmd -notmatch '^"(.+\\Watch Together\.exe)" "%1"$') { throw "unexpected open command: $cmd" }
+          if ($cmd -notmatch '^"(.+\\Cinemesh\.exe)" "%1"$') { throw "unexpected open command: $cmd" }
           $exe = $Matches[1]
           if (-not (Test-Path $exe)) { throw "installed app missing: $exe" }
           $dir = Split-Path $exe
           # _?= keeps the uninstaller in place, so -Wait waits for the uninstall itself
-          $p = Start-Process -FilePath (Join-Path $dir 'Uninstall Watch Together.exe') -ArgumentList '/S', "_?=$dir" -Wait -PassThru
+          $p = Start-Process -FilePath (Join-Path $dir 'Uninstall Cinemesh.exe') -ArgumentList '/S', "_?=$dir" -Wait -PassThru
           if ($p.ExitCode -ne 0) { throw "uninstaller exited with $($p.ExitCode)" }
           if (Test-Path $key) { throw "$key is still registered after uninstalling" }
-          Write-Host 'installed, registered watchtogether://, uninstalled and unregistered'
+          Write-Host 'installed, registered cinemesh://, uninstalled and unregistered'
       - uses: actions/upload-artifact@v7
         with:
           name: package-${{ matrix.target }}

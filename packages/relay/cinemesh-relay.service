@@ -1,15 +1,15 @@
-# systemd unit for the Watch Together blind relay. Install: see README.md.
+# systemd unit for the Cinemesh blind relay. Install: see README.md.
 [Unit]
-Description=Watch Together blind relay
+Description=Cinemesh blind relay
 Documentation=https://github.com/watch-together-p2p/watch-together-p2p/tree/main/packages/relay
 After=network-online.target
 Wants=network-online.target
 
 [Service]
-ExecStart=/usr/local/bin/wt-relay --port 49737
-# $STATE_DIRECTORY=/var/lib/wt-relay keeps the seed (the relay's key) across restarts and upgrades.
+ExecStart=/usr/local/bin/cinemesh-relay --port 49737
+# $STATE_DIRECTORY=/var/lib/cinemesh-relay keeps the seed (the relay's key) across restarts and upgrades.
 DynamicUser=yes
-StateDirectory=wt-relay
+StateDirectory=cinemesh-relay
 StateDirectoryMode=0700
 Restart=always
 RestartSec=5

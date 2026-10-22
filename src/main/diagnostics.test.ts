@@ -18,9 +18,7 @@ afterAll(() => rmSync(dir, { recursive: true, force: true }))
 
 describe('diagnostics', () => {
   it('redacts invite links and bare codes', () => {
-    expect(redactInvites(`joining watchtogether://join/${CODE} now`)).toBe(
-      'joining watchtogether://join/[invite redacted] now',
-    )
+    expect(redactInvites(`joining cinemesh://join/${CODE} now`)).toBe('joining cinemesh://join/[invite redacted] now')
     expect(redactInvites(`code ${CODE.toUpperCase()}`)).toBe('code [invite redacted]')
     expect(redactInvites('ordinary words stay')).toBe('ordinary words stay')
   })
@@ -58,9 +56,9 @@ describe('diagnostics', () => {
       },
       settings: { ...defaultSettings(), downloadDir: '/home/ram/Downloads', relayKey: 'ab'.repeat(32) },
       home: '/home/ram',
-      logs: [{ name: 'core.log', lines: [`got watchtogether://join/${CODE}`] }],
+      logs: [{ name: 'core.log', lines: [`got cinemesh://join/${CODE}`] }],
     })
-    expect(md).toContain('## Watch Together diagnostics')
+    expect(md).toContain('## Cinemesh diagnostics')
     expect(md).toContain('- OS: linux 6.18 (x64)')
     expect(md).toContain('- Session: wayland, desktop niri')
     expect(md).toContain('at ~/bin/mpv, version 0.41.0')
@@ -75,7 +73,7 @@ describe('diagnostics', () => {
   })
 
   it('copies the report, falling back to core.log when core sent nothing', async () => {
-    writeFileSync(join(dir, 'core.log'), `core says hi\nwatchtogether://join/${CODE}\n`)
+    writeFileSync(join(dir, 'core.log'), `core says hi\ncinemesh://join/${CODE}\n`)
     const r = await copyDiagnostics(
       { settings: defaultSettings, mpv: () => ({ path: null, kind: 'none', version: null }), logsDir: dir },
       { bogus: true },

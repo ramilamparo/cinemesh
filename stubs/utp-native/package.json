@@ -1,7 +1,7 @@
 {
   "name": "utp-native",
   "version": "0.0.0-stub",
-  "description": "Native-free stand-in: Watch Together runs WebTorrent with utp: false",
+  "description": "Native-free stand-in: Cinemesh runs WebTorrent with utp: false",
   "main": "index.js",
   "license": "MIT"
 }

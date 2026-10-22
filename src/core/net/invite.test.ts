@@ -36,14 +36,14 @@ describe('invite v1', () => {
 
   it('accepts the link, upper case and surrounding whitespace', () => {
     const code = encodeInvite(base)
-    expect(decodeInvite(`  watchtogether://join/${code}\n`)).toEqual(base)
+    expect(decodeInvite(`  cinemesh://join/${code}\n`)).toEqual(base)
     expect(decodeInvite(code.toUpperCase())).toEqual(base)
     expect(decodeInvite(`${code.slice(0, 50)}\n${code.slice(50)}`)).toEqual(base)
   })
 
   it('stays within what the shared invite-link extractor recognises', () => {
     const longest = encodeInvite({ ...base, relayKey: randomBytes(32), name: 'x'.repeat(48) })
-    expect(extractInvite(`join us: watchtogether://join/${longest} !`)).toBe(`watchtogether://join/${longest}`)
+    expect(extractInvite(`join us: cinemesh://join/${longest} !`)).toBe(`cinemesh://join/${longest}`)
   })
 
   it('detects every single-character corruption', () => {
@@ -75,8 +75,8 @@ describe('invite v1', () => {
 describe('invite text block', () => {
   it('has the room name, the link, the bare code, the download URL and per-OS steps', () => {
     const { code, link, text } = inviteText({ ...base, name: 'Friday' })
-    expect(link).toBe(`watchtogether://join/${code}`)
-    expect(text).toContain('Join "Friday" on Watch Together')
+    expect(link).toBe(`cinemesh://join/${code}`)
+    expect(text).toContain('Join "Friday" on Cinemesh')
     expect(text).toContain(`Link: ${link}`)
     expect(text).toContain(`Code: ${code}`)
     expect(text).toContain(DOWNLOAD_URL)

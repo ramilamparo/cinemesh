@@ -155,7 +155,7 @@ describe('core entry (index.ts) over the stdio transport', () => {
         { ch: 'control', m: { type: 'renderer-port' } },
         { ch: 'rpc', m: { t: 'hello', v: 1 } },
         req(1, 'session.recent'),
-        req(2, 'session.join', { invite: 'watchtogether://join/not-an-invite' }),
+        req(2, 'session.join', { invite: 'cinemesh://join/not-an-invite' }),
         req(3, 'app.ping'),
       )
       const answers = await core.until(() => {

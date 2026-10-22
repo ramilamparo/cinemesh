@@ -1,6 +1,6 @@
-# wt-relay
+# cinemesh-relay
 
-A blind UDP relay for Watch Together. Use it when two members cannot reach each other directly, for example when both are behind strict (RANDOM) NATs or carrier-grade NAT. The app shows this case as `HOLEPUNCH_DOUBLE_RANDOMIZED_NATS`, or as a member stuck on `via-peer`.
+A blind UDP relay for Cinemesh. Use it when two members cannot reach each other directly, for example when both are behind strict (RANDOM) NATs or carrier-grade NAT. The app shows this case as `HOLEPUNCH_DOUBLE_RANDOMIZED_NATS`, or as a member stuck on `via-peer`.
 
 The relay is built on [hyperdht](https://github.com/holepunchto/hyperdht) and [blind-relay](https://github.com/holepunchto/blind-relay). Members connect to it by public key, and it pairs their UDX streams. It forwards only end-to-end encrypted packets: it never sees room secrets, chat or video, and it cannot join rooms.
 
@@ -8,7 +8,7 @@ The relay is built on [hyperdht](https://github.com/holepunchto/hyperdht) and [b
 
 ```sh
 node packages/relay/bin.js                  # from a checkout
-wt-relay --port 49737 --seed-file ./seed    # once installed (see below)
+cinemesh-relay --port 49737 --seed-file ./seed    # once installed (see below)
 ```
 
 At startup it prints one JSON line with its `key` (64 hex characters). Paste that key into **Settings → Relay** on the host. The host then puts it into new invites and into its `room.state` message, so every member uses the same relay.
@@ -30,12 +30,12 @@ At startup it prints one JSON line with its `key` (64 hex characters). Paste tha
 Any small Linux VPS with a public IPv4 address works. The relay uses little CPU and memory, and is capped at 256 MB. What it costs is bandwidth: see below.
 
 1. Install Node.js 20 or newer.
-2. Install the relay so that `/usr/local/bin/wt-relay` exists:
+2. Install the relay so that `/usr/local/bin/cinemesh-relay` exists:
 
    ```sh
    git clone https://github.com/watch-together-p2p/watch-together-p2p.git
    cd watch-together-p2p/packages/relay
-   sudo npm install -g .          # installs blind-relay + hyperdht and links /usr/local/bin/wt-relay
+   sudo npm install -g .          # installs blind-relay + hyperdht and links /usr/local/bin/cinemesh-relay
    ```
 
 3. Open the UDP port in the VPS firewall and in the provider's security group:
@@ -47,17 +47,17 @@ Any small Linux VPS with a public IPv4 address works. The relay uses little CPU 
 4. Install and start the unit:
 
    ```sh
-   sudo cp wt-relay.service /etc/systemd/system/
+   sudo cp cinemesh-relay.service /etc/systemd/system/
    sudo systemctl daemon-reload
-   sudo systemctl enable --now wt-relay
-   journalctl -u wt-relay -o cat | head -3    # the "relay listening" line has the key
+   sudo systemctl enable --now cinemesh-relay
+   journalctl -u cinemesh-relay -o cat | head -3    # the "relay listening" line has the key
    ```
 
-   The unit runs as a `DynamicUser`. It keeps the seed in `/var/lib/wt-relay/seed` (`StateDirectory`), restarts on failure (`Restart=always`), and is limited to `MemoryMax=256M`. It also has the usual sandboxing (`ProtectSystem=strict`, `ProtectHome`, `PrivateTmp`, and only AF_INET and AF_INET6 sockets).
+   The unit runs as a `DynamicUser`. It keeps the seed in `/var/lib/cinemesh-relay/seed` (`StateDirectory`), restarts on failure (`Restart=always`), and is limited to `MemoryMax=256M`. It also has the usual sandboxing (`ProtectSystem=strict`, `ProtectHome`, `PrivateTmp`, and only AF_INET and AF_INET6 sockets).
 
 5. Check the result. The startup log should not warn "looks firewalled". In a room that uses the key, the relay status should read "ok". Rooms probe the relay every 5 minutes, and after a 10 s timeout show "relay unreachable".
 
-To upgrade, pull, run `sudo npm install -g .` again, then `sudo systemctl restart wt-relay`. The key stays the same.
+To upgrade, pull, run `sudo npm install -g .` again, then `sudo systemctl restart cinemesh-relay`. The key stays the same.
 
 ## Bandwidth math
 

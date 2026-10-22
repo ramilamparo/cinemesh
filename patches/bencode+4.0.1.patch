@@ -6,7 +6,7 @@ index e7c5908..a83b86c 100644
  const DICTIONARY_START = 0x64 // 'd'
  const LIST_START = 0x6C // 'l'
  const END_OF_TYPE = 0x65 // 'e'
-+// watch-together: peers send what is decoded here (BEP 10 handshakes, ut_metadata). Real messages and torrents
++// cinemesh: peers send what is decoded here (BEP 10 handshakes, ut_metadata). Real messages and torrents
 +// nest a few levels; recursing on every 'l' or 'd' of a hostile one ran out of stack instead.
 +const MAX_DEPTH = 64
  
@@ -63,7 +63,7 @@ index e7c5908..a83b86c 100644
  decode.buffer = function () {
    let sep = decode.find(STRING_DELIM)
    const length = getIntFromBuffer(decode.data, decode.position, sep)
-+  // watch-together: a length must be a whole number that ends within the data. A negative one moved the
++  // cinemesh: a length must be a whole number that ends within the data. A negative one moved the
 +  // position backwards, so a dict or list never ended and the event loop stopped; one past the end returned
 +  // a short string. Now every step moves forward (an integer or a list or dict always did), and running out
 +  // of data throws, so a decode ends.

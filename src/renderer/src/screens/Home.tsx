@@ -23,7 +23,7 @@ export function Home(): React.JSX.Element {
   return (
     <div className={styles.home}>
       <section className={styles.hero}>
-        <h1>Watch together</h1>
+        <h1>Cinemesh</h1>
         <p className={styles.lead}>
           Share a video from your computer and watch it in sync with friends. The file goes straight from you to them.
         </p>
@@ -214,7 +214,7 @@ function JoinCard(): React.JSX.Element {
           rows={2}
           value={text}
           spellCheck={false}
-          placeholder="watchtogether://join/…"
+          placeholder="cinemesh://join/…"
           aria-invalid={showError || undefined}
           aria-describedby={showError ? 'invite-error' : undefined}
           onChange={(e) => setText(e.target.value)}
@@ -227,7 +227,7 @@ function JoinCard(): React.JSX.Element {
         />
         {showError && (
           <p id="invite-error" className="error-text" style={{ margin: 0, fontSize: 12 }}>
-            That does not look like an invite. It starts with watchtogether://join/
+            That does not look like an invite. It starts with cinemesh://join/
           </p>
         )}
         <div className="row">

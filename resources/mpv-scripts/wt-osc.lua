@@ -1,4 +1,4 @@
--- wt-osc.lua: Watch Together's on-screen controller for mpv (plan §4.4, messages in §5.3).
+-- wt-osc.lua: Cinemesh's on-screen controller for mpv (plan §4.4, messages in §5.3).
 --
 -- Written from scratch for this project; nothing is taken from mpv's osc.lua.
 --

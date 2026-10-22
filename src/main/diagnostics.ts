@@ -79,7 +79,7 @@ export function formatDiagnostics(d: DiagnosticsInput): string {
   const settings: Record<string, unknown> = { ...d.settings }
   if (d.settings.relayKey) settings.relayKey = `${d.settings.relayKey.slice(0, 8)}…`
   const lines: string[] = [
-    '## Watch Together diagnostics',
+    '## Cinemesh diagnostics',
     '',
     `Generated ${d.generatedAt.toISOString()}`,
     '',

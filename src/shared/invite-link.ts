@@ -1,13 +1,13 @@
 // Text-level invite handling shared by main (deep links, clipboard) and the renderer (paste box).
 // Decoding and verification of the binary invite live in src/core/net/invite.ts (M2).
 
-export const INVITE_SCHEME = 'watchtogether'
+export const INVITE_SCHEME = 'cinemesh'
 
 // z-base-32 alphabet; a v1 invite is at least 68 bytes, i.e. 109 characters.
 const Z32_CODE = /[ybndrfg8ejkmcpqxot1uwisza345h769]{100,400}/
 
 /**
- * Pulls an invite out of free text: a watchtogether://join/<code> link or a bare code, case-insensitively.
+ * Pulls an invite out of free text: a cinemesh://join/<code> link or a bare code, case-insensitively.
  * Returns the canonical link, or null. `joinLines` also removes whitespace inside the code, for the paste
  * box where the user pasted only the invite (chat apps sometimes wrap it); it must not be used on
  * surrounding chat text, where trailing words would run into the code.

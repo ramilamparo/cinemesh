@@ -5,7 +5,7 @@ import bencode from 'bencode'
 // The session torrent (plan §4.2): always multi-file [video, ...externalSubs], private, no announce.
 // The video is file 0 at offset 0, so its whole-piece hashes do not depend on which subtitles exist.
 
-export const TORRENT_NAME = 'WatchTogether'
+export const TORRENT_NAME = 'Cinemesh'
 const MIN_PIECE = 1 << 20
 const MAX_PIECE = 4 << 20
 const TARGET_PIECES = 16_384

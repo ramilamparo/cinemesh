@@ -720,7 +720,7 @@ describe('viewer join path', () => {
     const failed = await viewer.client.until('session', (s) => s.phase === 'error')
     expect(failed.error).toEqual({
       code: 'update-required',
-      message: 'The host uses a newer version of Watch Together. Update the app to join.',
+      message: 'The host uses a newer version of Cinemesh. Update the app to join.',
     })
     expect(phases(viewer.client)).not.toContain('confirm-join')
     expect(host.reads).toBe(0) // nothing was fetched for it

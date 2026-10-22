@@ -120,7 +120,7 @@ describe('buildMpvArgs', () => {
     '--demuxer-seekable-cache=yes', '--cache-pause=yes', '--cache-pause-initial=no', '--cache-pause-wait=1',
     '--network-timeout=0', '--stream-buffer-size=1MiB', '--hr-seek=yes', '--demuxer-mkv-subtitle-preroll-secs-index=2',
     '--vo=gpu-next', '--hwdec=auto-safe', '--target-colorspace-hint=auto', '--force-media-title=Movie.mkv',
-    '--autofit-larger=90%x90%', '--wayland-app-id=watch-together-player', '--log-file=/logs/mpv.log',
+    '--autofit-larger=90%x90%', '--wayland-app-id=cinemesh-player', '--log-file=/logs/mpv.log',
     '--gpu-api=vulkan,opengl', '--input-ipc-client=fd://3',
   ]
   const sorted = (a: readonly string[]): string[] => [...a].sort()

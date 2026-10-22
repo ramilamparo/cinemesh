@@ -41,7 +41,7 @@ export function encodeInvite(invite: Invite): string {
 }
 
 /**
- * Accepts a watchtogether:// link or a bare code (case and surrounding whitespace ignored). Throws a
+ * Accepts a cinemesh:// link or a bare code (case and surrounding whitespace ignored). Throws a
  * CodedError with one of NET_ERRORS.invite* when the text is not a valid v1 invite.
  */
 export function decodeInvite(text: string): Invite {
@@ -92,7 +92,7 @@ export interface InviteText {
 export function inviteText(invite: Invite): InviteText {
   const code = encodeInvite(invite)
   const link = inviteLink(code)
-  const title = invite.name.trim() ? `Join "${invite.name.trim()}" on Watch Together` : 'Join me on Watch Together'
+  const title = invite.name.trim() ? `Join "${invite.name.trim()}" on Cinemesh` : 'Join me on Cinemesh'
   const text = [
     title,
     '',
@@ -101,8 +101,8 @@ export function inviteText(invite: Invite): InviteText {
     '',
     `No app yet? Download it from ${DOWNLOAD_URL}`,
     '- Windows: run the Setup .exe, then click the link (or paste the code on the Home screen).',
-    '- macOS: open the .dmg, drag the app to Applications, right-click it and choose Open the first time.',
-    '- Linux: make the .AppImage executable and start it once so the link opens it, or install the .deb.',
+    '- macOS: open the .dmg, drag the app to Applications, open it, then allow it under System Settings > Privacy & Security > Open Anyway.',
+    '- Linux: install the .deb, or make the .AppImage executable, start it and choose Settings > Register invite links.',
   ].join('\n')
   return { code, link, text }
 }
