@@ -192,17 +192,26 @@ jobs:
       - name: Bundled mpv (official v0.41.0 build, SHA-256 pinned)
         if: runner.os != 'Linux'
         run: node scripts/fetch-mpv.mjs --platform ${{ matrix.target }}
+      - name: Version (package.json's on a matching v* tag, as release.yml runs it, else <version>-dev.<run number>)
+        id: version
+        shell: bash
+        run: |
+          base=$(node -p 'require("./package.json").version')
+          if [ "$GITHUB_REF" = "refs/tags/v$base" ]; then v=$base; else v="$base-dev.$GITHUB_RUN_NUMBER"; fi
+          echo "version=$v" >> "$GITHUB_OUTPUT"
       - run: npm run build
-      - run: npx electron-builder ${{ matrix.builder }} --publish never
+      - run: >-
+          npx electron-builder ${{ matrix.builder }} --publish never
+          -c.extraMetadata.version=${{ steps.version.outputs.version }}
       - name: Check the packages and launch the app with --selftest (Linux)
         if: runner.os == 'Linux'
         # No FUSE on the runner: the AppImage runtime extracts itself and runs instead of mounting.
         env:
           APPIMAGE_EXTRACT_AND_RUN: '1'
-        run: xvfb-run -a node scripts/check-package.mjs --selftest
+        run: xvfb-run -a node scripts/check-package.mjs --selftest --dir release/${{ steps.version.outputs.version }}
       - name: Check the packages and launch the app with --selftest
         if: runner.os != 'Linux'
-        run: node scripts/check-package.mjs --selftest
+        run: node scripts/check-package.mjs --selftest --dir release/${{ steps.version.outputs.version }}
       - name: Downloaded copies keep the signature (macOS zip as Archive Utility unpacks it, and the DMG)
         if: runner.os == 'macOS'
         run: |

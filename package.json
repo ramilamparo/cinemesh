@@ -30,6 +30,7 @@
     "dist:linux": "npm run build && electron-builder --linux --publish never",
     "check:package": "node scripts/check-package.mjs",
     "postinstall": "patch-package",
+    "version": "node scripts/changelog.mjs release && git add CHANGELOG.md",
     "test:alpha": "WT_ALPHA=1 scripts/isolated.sh vitest run --project alpha",
     "isolated": "scripts/isolated.sh"
   },

@@ -54,3 +54,43 @@ not code bugs; they are decisions, accounts or legal work that the build cannot 
   MpvSetup. Set `mac.minimumSystemVersion` per architecture in CI if that fallback is not good enough.
 - **Gatekeeper and the nested `mpv.app`** (spike S9). If quarantined downloads refuse the nested app, move it to
   `Contents/MacOS` via `mac.extraFiles`.
+
+## Versioning
+
+Cinemesh follows [Semantic Versioning](https://semver.org). Until 1.0.0, the minor number marks breaking changes and
+the patch number everything else. From 1.0.0:
+
+- **Major:** members on different major versions cannot share a room. Examples are changes to the peer wire
+  (`proto` in the Hello, lane and message formats), to invites, or to the room and auth key derivation. Also any
+  change that drops saved data or settings without migrating them.
+- **Minor:** new features that still talk to the previous minor versions. New optional message fields and new
+  settings with defaults count here.
+- **Patch:** fixes only.
+
+`packages/relay` keeps its own version and changes it only when the relay changes.
+
+Every build is named with its version, both in its file names and in the app (`app.getVersion()`, Copy diagnostics):
+
+- A release builds from its `v<version>` tag, with package.json's version, for example `Cinemesh-Setup-0.2.0.exe` and
+  `cinemesh_0.2.0_amd64.deb`. `release.yml` refuses a tag that does not match package.json, a version that
+  CHANGELOG.md has no section for, and an asset whose name lacks the version.
+- CI and Build runs on any other ref build `<version>-dev.<run number>`, for example `Cinemesh-0.2.0-dev.41.AppImage`.
+  The deb and pacman packages turn that into `0.2.0~dev.41` and `0.2.0_dev.41`, which sort before the release.
+
+### Cutting a release
+
+1. Under **Unreleased** in CHANGELOG.md, list what the release changes (Added, Changed, Fixed, Removed). Commit it.
+2. Bump the version:
+
+   ```sh
+   npm version 0.2.0 -m "Release %s"   # or: npm version patch | minor | major
+   ```
+
+   This updates package.json and package-lock.json, then runs `scripts/changelog.mjs release`, which renames the
+   Unreleased section to `0.2.0 - <date>` and opens a new empty one. It then commits everything as "Release 0.2.0"
+   and tags `v0.2.0`. It stops before committing if Unreleased is empty. In that case, undo the bump with
+   `git checkout package.json package-lock.json`.
+
+3. Push the commit and the tag: `git push --follow-tags`.
+4. `release.yml` runs CI on the tag and drafts the GitHub release "Cinemesh 0.2.0". The draft's notes are the
+   changelog section followed by the download table. Check the draft, then publish it.

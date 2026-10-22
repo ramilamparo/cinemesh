@@ -27,6 +27,8 @@ track, subtitles and volume. Video plays in [mpv](https://mpv.io), so any codec,
 - **Limits** for your upload and (as a viewer) your download speed.
 - Light and dark themes; Windows, macOS and Linux (X11 and Wayland).
 
+What changed in each version is in [CHANGELOG.md](CHANGELOG.md).
+
 ## Install
 
 Download a build for your system and follow [docs/install.md](docs/install.md). It covers getting past the

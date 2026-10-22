@@ -4,8 +4,9 @@
 #            Cinemesh-<version>-win.zip (unpacked app: run Cinemesh.exe, no install), both with the
 #            bundled mpv
 #   linux    Cinemesh-<version>.AppImage (uses the system or Flatpak mpv ≥ 0.39)
-# Each package is checked and launched once with --selftest (scripts/check-package.mjs) before upload. The files are
-# the run's artifacts; release.yml publishes releases for v* tags.
+# Every build carries a version: package.json's when run on its v* tag, otherwise <version>-dev.<run number> (in the
+# file names and in the app itself). Each package is checked and launched once with --selftest
+# (scripts/check-package.mjs) before upload. The files are the run's artifacts; release.yml publishes releases.
 name: Build
 
 on:
@@ -54,20 +55,30 @@ jobs:
       - name: Bundled mpv (official v0.41.0 build, SHA-256 pinned)
         if: matrix.mpv
         run: node scripts/fetch-mpv.mjs --platform ${{ matrix.mpv }}
+      - name: Version (package.json's on a matching v* tag, else <version>-dev.<run number>)
+        id: version
+        shell: bash
+        run: |
+          base=$(node -p 'require("./package.json").version')
+          if [ "$GITHUB_REF" = "refs/tags/v$base" ]; then v=$base; else v="$base-dev.$GITHUB_RUN_NUMBER"; fi
+          echo "version=$v" >> "$GITHUB_OUTPUT"
+          echo "Building Cinemesh $v from ${GITHUB_SHA::7}"
       - run: npm run build
-      - run: npx electron-builder ${{ matrix.builder }} --publish never
+      - run: >-
+          npx electron-builder ${{ matrix.builder }} --publish never
+          -c.extraMetadata.version=${{ steps.version.outputs.version }}
       - name: Check the package and launch it with --selftest (Linux)
         if: runner.os == 'Linux'
         # No FUSE on the runner: the AppImage runtime extracts itself and runs instead of mounting.
         env:
           APPIMAGE_EXTRACT_AND_RUN: '1'
-        run: xvfb-run -a node scripts/check-package.mjs --selftest
+        run: xvfb-run -a node scripts/check-package.mjs --selftest --dir release/${{ steps.version.outputs.version }}
       - name: Check the packages and launch the app with --selftest (Windows)
         if: runner.os == 'Windows'
-        run: node scripts/check-package.mjs --selftest
+        run: node scripts/check-package.mjs --selftest --dir release/${{ steps.version.outputs.version }}
       - uses: actions/upload-artifact@v7
         with:
-          name: cinemesh-${{ matrix.target }}
+          name: cinemesh-${{ steps.version.outputs.version }}-${{ matrix.target }}
           path: |
             release/*/*.AppImage
             release/*/*Setup*.exe

@@ -1,6 +1,7 @@
 # Release (plan §4.6 "Signing" and "CI"). For a v* tag that matches package.json's version:
 #   1. run the whole CI workflow, which builds, checks and smoke-launches every package (ci.yml, workflow_call);
-#   2. attach the packages to a DRAFT GitHub release, with SHA256SUMS and the mpv source tarball that
+#   2. attach the packages (each named with the version) to a DRAFT GitHub release titled "Cinemesh <version>",
+#      with that version's CHANGELOG.md section as its notes, with SHA256SUMS and the mpv source tarball that
 #      resources/licenses/mpv/SOURCE-OFFER.md promises. With the MINISIGN_SECRET_KEY secret set (an unencrypted key
 #      from `minisign -G -W`), SHA256SUMS is also signed (SHA256SUMS.minisig).
 # Publishing the draft stays a manual step. The builds are unsigned (ad-hoc on macOS): docs/install.md.
@@ -29,6 +30,10 @@ jobs:
             echo "::error::tag $TAG does not match package.json version $version"
             exit 1
           fi
+      - name: CHANGELOG.md has a section for this version
+        run: node scripts/changelog.mjs notes "$TAG" > /dev/null
+        env:
+          TAG: ${{ github.ref_name }}
 
   ci:
     needs: version
@@ -70,6 +75,14 @@ jobs:
           for f in *' '*; do
             if [ -e "$f" ]; then mv -- "$f" "${f// /-}"; fi
           done
+          # Every package carries the release's version in its name (the mpv tarball carries mpv's).
+          v="${TAG#v}"
+          for f in *; do
+            case "$f" in
+              mpv-*.tar.gz | *"$v"*) ;;
+              *) echo "::error::$f does not name version $v"; exit 1 ;;
+            esac
+          done
           sha256sum -- * > SHA256SUMS
           cat SHA256SUMS
       - name: Is a minisign key configured?
@@ -93,7 +106,12 @@ jobs:
           INSTALL_DOC: ${{ github.server_url }}/${{ github.repository }}/blob/${{ github.ref_name }}/docs/install.md
         run: |
           v="${TAG#v}"
+          node scripts/changelog.mjs notes "$TAG" > "$RUNNER_TEMP/changes.md"
           cat > "$RUNNER_TEMP/notes.md" <<EOF
+          $(cat "$RUNNER_TEMP/changes.md")
+
+          ## Downloads
+
           These builds are not code-signed. [Installing Cinemesh]($INSTALL_DOC) shows how to open them on
           macOS (Open Anyway) and Windows (SmartScreen: More info, then Run anyway).
 
