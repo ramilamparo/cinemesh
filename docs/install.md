@@ -179,7 +179,9 @@ without a relay.
 - Settings: `%APPDATA%\Cinemesh` (Windows), `~/Library/Application Support/Cinemesh` (macOS),
   `~/.config/Cinemesh` (Linux). Logs: **Settings > Help and troubleshooting > Open logs folder**.
 - Videos you receive are saved under `Downloads/Cinemesh` unless you choose another folder under
-  **Settings > Storage**. When you leave a room, the app asks whether to save the file or delete it.
+  **Settings > Storage**. When you leave a room, the app asks whether to save the file (once it is fully
+  downloaded), keep it to resume later, or delete it. Kept downloads are removed after 7 days unused, or sooner
+  above **Settings > Storage > Cache limit**.
 - Uninstalling leaves both in place. Delete them by hand if you no longer want them.
 
 ## Building from source

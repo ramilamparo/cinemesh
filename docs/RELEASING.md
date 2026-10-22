@@ -71,6 +71,40 @@ Every build is named with its version, both in its file names and in the app (`a
 - CI and Build runs on any other ref build `<version>-dev.<run number>`, for example `Cinemesh-0.2.0-dev.41.AppImage`.
   The deb and pacman packages turn that into `0.2.0~dev.41` and `0.2.0_dev.41`, which sort before the release.
 
+### Writing the changelog
+
+`CHANGELOG.md`'s **Unreleased** section becomes the GitHub release notes. A changelog skill (or a person) filling it
+should follow these rules for Cinemesh:
+
+- **Headings**, in this order, leaving out empty ones: Breaking, Added, Changed, Fixed, Removed, Security, and
+  Known limitations (what users should know before installing; update it when a limitation is lifted or a new one
+  appears).
+- **Breaking** means a member on the previous release cannot share a room with one on this release (the wire
+  protocol, invites, room keys), or saved data or settings are lost. Changing `productName`, `appId` or the package
+  name moves the settings folder and installs the app next to the old one, even when rooms still work. Say what
+  users must do, for example "Everyone in a room needs this version".
+- **The relay** (`packages/relay`) has its own version. List changes its operators must act on under Changed,
+  starting with "Relay:"; one that loses the relay's key or seed is Breaking for operators.
+- **Style:** short, plain, sentence case. A full stop only when an entry has more than one sentence. UI labels in
+  bold (**Resync to live**, **Settings > Network**). Lines wrap at 120 characters with a two-space hanging indent,
+  and `prettier` formats the file.
+- **Where user-visible changes live:**
+
+  | Area                                                                     | Look for                                                                                 |
+  | ------------------------------------------------------------------------ | ---------------------------------------------------------------------------------------- |
+  | `src/renderer/src`                                                       | screens, buttons, texts, settings fields                                                 |
+  | `src/main`                                                               | window and tray text, deep links, default folders                                        |
+  | `package.json` (`name`, `productName`), `electron-builder.yml` (`appId`) | where settings and recent rooms are stored; whether an install replaces the previous one |
+  | `src/shared/settings.ts`, `src/shared/ipc/*.ts`                          | new settings and defaults, new actions                                                   |
+  | `src/core/{net,transfer,sync,media,player,session}`                      | connecting, downloading, sync, playback, saving                                          |
+  | `resources/mpv-scripts/wt-osc.lua`                                       | player controls and key bindings                                                         |
+  | `src/core/net/invite.ts`, `src/core/sync/protocol.ts`                    | anything that stops old and new versions sharing a room                                  |
+  | `electron-builder.yml`, `build/`, `scripts/fetch-mpv.mjs`                | packages, file names, the bundled mpv version                                            |
+  | `packages/relay`                                                         | the relay server                                                                         |
+  | `docs/install.md`                                                        | install steps                                                                            |
+
+  Leave out tests, `spikes/`, ADRs, CI and refactors unless they change what users download or run.
+
 ### Cutting a release
 
 1. Under **Unreleased** in CHANGELOG.md, list what the release changes (Added, Changed, Fixed, Removed), and push

@@ -11,7 +11,7 @@ node packages/relay/bin.js                  # from a checkout
 cinemesh-relay --port 49737 --seed-file ./seed    # once installed (see below)
 ```
 
-At startup it prints one JSON line with its `key` (64 hex characters). Paste that key into **Settings → Relay** on the host. The host then puts it into new invites and into its `room.state` message, so every member uses the same relay.
+At startup it prints one JSON line with its `key` (64 hex characters). Paste that key into **Settings > Network > Relay key** on the host. The host then puts it into new invites and into its `room.state` message, so every member uses the same relay.
 
 | Option             | Default                                   | Meaning                                                                               |
 | ------------------ | ----------------------------------------- | ------------------------------------------------------------------------------------- |
@@ -68,7 +68,7 @@ A relayed link carries everything that two members exchange, and the relay sees 
 - 1080p at 10 Mbit/s for 2 h: ≈ **9 GB** each way, per relayed viewer.
 - Control traffic (bus, sync pings, datagrams) is a few kbit/s per link and does not matter here.
 
-Many providers bill or cap only egress, so count about _B × T_ per relayed viewer per session against the monthly allowance. Viewers that are not relayed (direct, lan) cost the relay nothing. Only links that cannot hole-punch go through it, and a member whose own NAT is RANDOM uses it for all its links. Forwarding a UDP port on that member's router (**Settings → UDP port**) often removes the need for the relay.
+Many providers bill or cap only egress, so count about _B × T_ per relayed viewer per session against the monthly allowance. Viewers that are not relayed (direct, lan) cost the relay nothing. Only links that cannot hole-punch go through it, and a member whose own NAT is RANDOM uses it for all its links. Forwarding a UDP port on that member's router (**Settings > Network > UDP port**) often removes the need for the relay.
 
 ## Security notes
 
