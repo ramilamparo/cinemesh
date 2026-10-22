@@ -6,10 +6,9 @@ productName: Cinemesh
 # `${LINUX_APP_ID}.desktop` in src/main/linux-desktop.ts (checked by linux-desktop.test.ts).
 extraMetadata:
   desktopName: app.cinemesh.desktop
-  # The deb/rpm/pacman URL field (electron-builder refuses to build them without a homepage). PLACEHOLDER until the
-  # project is published: keep it in step with DOWNLOAD_URL in src/core/net/invite.ts and the issue tracker link in
-  # resources/licenses/mpv/SOURCE-OFFER.md.
-  homepage: https://github.com/watch-together-p2p/watch-together-p2p
+  # The deb/rpm/pacman URL field (electron-builder refuses to build them without a homepage). Keep it in step with
+  # DOWNLOAD_URL in src/core/net/invite.ts and the issue tracker link in resources/licenses/mpv/SOURCE-OFFER.md.
+  homepage: https://github.com/ramilamparo/cinemesh
 copyright: Copyright © 2026 Cinemesh contributors
 # Icons come from build/ by name: icon.icns (mac), icon.ico (win), icons/<n>x<n>.png (linux). `npm run icons`.
 directories:

@@ -5,14 +5,10 @@ not code bugs; they are decisions, accounts or legal work that the build cannot 
 
 ## Blockers
 
-1. **A real repository URL.** The project has no published repository yet. A placeholder,
-   `https://github.com/watch-together-p2p/watch-together-p2p`, appears in:
-   - `src/core/net/invite.ts` (`DOWNLOAD_URL`, which goes into every copied invite);
-   - `electron-builder.yml` (`extraMetadata.homepage`, which deb, rpm and pacman require);
-   - `resources/licenses/mpv/SOURCE-OFFER.md` (the issue link of the written offer);
-   - `packages/relay/README.md` and `packages/relay/cinemesh-relay.service`.
-
-   Replace them together. `linux.maintainer` in `electron-builder.yml` also has no contact address yet.
+1. **A maintainer contact.** The repository is https://github.com/ramilamparo/cinemesh, and every URL points there
+   (`DOWNLOAD_URL` in `src/core/net/invite.ts`, `extraMetadata.homepage` in `electron-builder.yml`, the issue link in
+   `resources/licenses/mpv/SOURCE-OFFER.md`, `packages/relay`). `linux.maintainer` in `electron-builder.yml` still has
+   no contact address.
 
 2. **GPLv3 corresponding source for the bundled mpv** (Windows and macOS packages).
    - The macOS builds link Homebrew's FFmpeg 8.0.1, built with `--enable-version3`, plus x264, x265 and Rubber

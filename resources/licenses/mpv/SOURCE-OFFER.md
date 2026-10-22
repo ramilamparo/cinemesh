@@ -87,4 +87,4 @@ For at least three years after we last distribute a Cinemesh release that contai
 who asks a complete, machine-readable copy of the corresponding source code of that release's mpv build (mpv, every
 library in it, and the scripts used to build it), by download or on a medium customarily used for software
 interchange, for no more than our cost of physically performing the distribution. To ask, open an issue in the
-project's tracker: <https://github.com/watch-together-p2p/watch-together-p2p/issues>.
+project's tracker: <https://github.com/ramilamparo/cinemesh/issues>.

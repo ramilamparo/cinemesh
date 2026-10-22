@@ -155,7 +155,7 @@ These are plan items not yet delivered, not deviations:
 - **M8:** the 3-machine LAN session; 5 viewers; late join while the room plays. See ADR 0008 §5 and §6.
 - **M9:** the CI and release workflows have never run on GitHub, so the Windows and macOS packages, `--selftest` on
   them, the NSIS registration test, `codesign --verify` and the mpv 0.39/0.40 jobs are unproven. Release blockers:
-  the placeholder repository URL, the GPLv3 corresponding source for the bundled mpv, the bundled libraries'
+  the maintainer contact, the GPLv3 corresponding source for the bundled mpv, the bundled libraries'
   notices and a minisign key. See `docs/RELEASING.md` "Blockers" 1–5, and "Worth deciding" for the macOS minimum
   version and the nested `mpv.app`.
 - **M10:**
@@ -222,9 +222,9 @@ On 2026-10-22, before any release, the product was renamed from "Watch Together"
   `wt-osc.lua` and its `wt_osc` client name, the `wtp/...` protocol and topic labels, the `WT_*` environment
   variables, the `.wt-partial` folder and `wt_` identifiers. Renaming the protocol and topic labels would change the
   wire and the swarm topics for no user benefit, and the rest is internal.
-- **Kept until the user picks the real repository:** the placeholder GitHub URLs (`DOWNLOAD_URL` in
+- **Repository:** the placeholder GitHub URLs now point at https://github.com/ramilamparo/cinemesh (`DOWNLOAD_URL` in
   `src/core/net/invite.ts`, `homepage` in `electron-builder.yml`, the tracker in
-  `resources/licenses/mpv/SOURCE-OFFER.md`, the relay README and unit). `docs/RELEASING.md` lists them.
+  `resources/licenses/mpv/SOURCE-OFFER.md`, the relay README and unit).
 - **Not migrated:** old `watchtogether://` links do not open the app, and settings, recent rooms and logs in the old
   `Watch Together` userData folder (and partial downloads under `<Downloads>/Watch Together`) are not picked up.
   There are no released users.

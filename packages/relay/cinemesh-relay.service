@@ -1,7 +1,7 @@
 # systemd unit for the Cinemesh blind relay. Install: see README.md.
 [Unit]
 Description=Cinemesh blind relay
-Documentation=https://github.com/watch-together-p2p/watch-together-p2p/tree/main/packages/relay
+Documentation=https://github.com/ramilamparo/cinemesh/tree/main/packages/relay
 After=network-online.target
 Wants=network-online.target
 

@@ -10,8 +10,8 @@ import { truncateUtf8 } from './wire.js'
 
 export const INVITE_VERSION = 1
 export const INVITE_NAME_MAX_BYTES = 48
-/** Where people without the app get it. Set for real when releases are published (M9). */
-export const DOWNLOAD_URL = 'https://github.com/watch-together-p2p/watch-together-p2p/releases/latest'
+/** Where people without the app get it: the latest GitHub release. */
+export const DOWNLOAD_URL = 'https://github.com/ramilamparo/cinemesh/releases/latest'
 
 const FLAG_RELAY = 0b01
 const FLAG_NAME = 0b10

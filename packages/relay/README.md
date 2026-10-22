@@ -33,8 +33,8 @@ Any small Linux VPS with a public IPv4 address works. The relay uses little CPU 
 2. Install the relay so that `/usr/local/bin/cinemesh-relay` exists:
 
    ```sh
-   git clone https://github.com/watch-together-p2p/watch-together-p2p.git
-   cd watch-together-p2p/packages/relay
+   git clone https://github.com/ramilamparo/cinemesh.git
+   cd cinemesh/packages/relay
    sudo npm install -g .          # installs blind-relay + hyperdht and links /usr/local/bin/cinemesh-relay
    ```
 
