@@ -11,7 +11,7 @@ import type {
   SyncEvent,
 } from '../../shared/ipc/core.js'
 import type { StartMode } from '../../shared/settings.js'
-import { CLOCK, ClockClient, pong } from './clock.js'
+import { CLOCK, ClockClient, type OffsetEstimator, pong } from './clock.js'
 import type { DesyncInfo } from './desync.js'
 import { GroupController, type GroupNotice, type GroupSnapshot } from './group.js'
 import { MemberController } from './member.js'
@@ -66,6 +66,17 @@ export interface SyncEngineOptions {
   nudge: boolean
   /** viewer: the user's desync warning setting (ms behind; 0 or absent = off); the host never warns itself */
   desyncWarnMs?: number
+  /**
+   * Viewer: the host's clock estimate from the engine this one replaces (a playlist's next item, ADR 0011 §4). The
+   * host process is the same, so the estimate holds and playback need not wait for a fresh one.
+   */
+  clockEstimator?: OffsetEstimator
+  /**
+   * Viewer: the sync epoch whose states this engine applies, read on each state; null applies any (a host without a
+   * playlist). A playlist runs one epoch per item, and the next item's first states can arrive before the
+   * playlist says it changed: applied here, they would move the previous file.
+   */
+  acceptEpoch?: () => number | null
   /** host only */
   host?: {
     syncEpoch: number
@@ -180,6 +191,7 @@ export class SyncEngine extends EventEmitter<SyncEngineEvents> {
             this.member.onOffset(jumped)
             this.emit('clock', this.clockInfo())
           },
+          ...(o.clockEstimator ? { estimator: o.clockEstimator } : {}),
         })
     this.member = new MemberController({
       clock,
@@ -234,9 +246,19 @@ export class SyncEngine extends EventEmitter<SyncEngineEvents> {
     this.member.start()
     this.group?.start()
     if (this.clockClient) {
-      this.clockClient.restart({ resetEstimate: true })
+      this.clockClient.restart({ resetEstimate: !this.o.clockEstimator })
       this.hello()
     }
+  }
+
+  /** Viewer: the host clock estimate, for the engine that takes over from this one. */
+  clockEstimator(): OffsetEstimator | null {
+    return this.clockClient?.estimator ?? null
+  }
+
+  private accepts(syncEpoch: number): boolean {
+    const want = this.o.acceptEpoch?.() ?? null
+    return want === null || syncEpoch === want
   }
 
   stop(): void {
@@ -516,7 +538,7 @@ export class SyncEngine extends EventEmitter<SyncEngineEvents> {
   private onBusAsViewer(msg: SyncBusMessage): void {
     switch (msg.t) {
       case 'sync.state':
-        this.member.applyState(msg)
+        if (this.accepts(msg.syncEpoch)) this.member.applyState(msg)
         break
       case 'sync.intentResult': {
         const e = this.inFlight
@@ -542,7 +564,7 @@ export class SyncEngine extends EventEmitter<SyncEngineEvents> {
     }
     if (from !== this.o.hostId) return
     if (d.type === DGRAM_PONG) this.clockClient?.onPong(d)
-    else if (d.type === DGRAM_STATE_FAST) this.member.applyFast(d)
+    else if (d.type === DGRAM_STATE_FAST && this.accepts(d.syncEpoch)) this.member.applyFast(d)
   }
 
   private onPresence({ kind, peerId, name, sinceMs }: PresenceEvent): void {

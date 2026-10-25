@@ -46,7 +46,10 @@ export class SweepKeep {
 
 interface Group {
   dir: string
+  /** rooms whose item playing downloads here: their records go with the folder */
   roomIds: string[]
+  /** rooms that downloaded another playlist item here (ADR 0011 §8): kept with the room, the record stays */
+  usedBy: string[]
   usedAt: number
   bytes: number
 }
@@ -82,27 +85,35 @@ export async function sweepPartialData(opts: {
   const groups = new Map<string, Group>()
   const kept = new Set<string>()
   const folders = new Set(opts.folders.map((f) => resolve(f)))
+  const group = (dir: string): Group => {
+    const g = groups.get(dir) ?? { dir, roomIds: [], usedBy: [], usedAt: 0, bytes: 0 }
+    groups.set(dir, g)
+    return g
+  }
   for (const rec of await opts.store.list()) {
     if (rec.role !== 'viewer') continue
     const file = await readSessionFile(opts.userData, rec.id)
-    if (!file?.transferDir) continue
-    const dir = resolve(file.transferDir)
-    folders.add(dirname(dirname(dir)))
-    if (opts.keep.has(rec.id)) {
-      kept.add(dir)
-      continue
+    if (!file) continue
+    const current = file.transferDir ? resolve(file.transferDir) : null
+    const others = (file.playlist ?? []).flatMap((e) => (e.transferDir ? [resolve(e.transferDir)] : []))
+    for (const dir of new Set([...(current ? [current] : []), ...others])) {
+      folders.add(dirname(dirname(dir)))
+      if (opts.keep.has(rec.id)) {
+        kept.add(dir)
+        continue
+      }
+      if (!isPartialDir(dir)) continue
+      const g = group(dir)
+      if (dir === current) g.roomIds.push(rec.id)
+      else g.usedBy.push(rec.id)
+      g.usedAt = Math.max(g.usedAt, file.updatedAt)
     }
-    if (!isPartialDir(dir)) continue
-    const g = groups.get(dir) ?? { dir, roomIds: [], usedAt: 0, bytes: 0 }
-    g.roomIds.push(rec.id)
-    g.usedAt = Math.max(g.usedAt, file.updatedAt)
-    groups.set(dir, g)
   }
   for (const folder of folders) {
     const names = await readdir(join(folder, PARTIAL)).catch(() => [] as string[])
     for (const name of names) {
       const dir = join(folder, PARTIAL, name)
-      if (isPartialDir(dir) && !groups.has(dir)) groups.set(dir, { dir, roomIds: [], usedAt: 0, bytes: 0 })
+      if (isPartialDir(dir) && !groups.has(dir)) group(dir)
     }
   }
   const live: Group[] = []
@@ -121,7 +132,7 @@ export async function sweepPartialData(opts: {
   const swept: SweptDir[] = []
   // the user may resume one of these rooms while the sweep runs: keep is asked again right before deleting
   const remove = (g: Group, why: SweptDir['why']): Promise<boolean> =>
-    opts.keep.unlessKept(g.roomIds, async () => {
+    opts.keep.unlessKept([...g.roomIds, ...g.usedBy], async () => {
       if (opts.signal?.aborted || (await exporting(g.dir))) return false
       try {
         await rm(g.dir, { recursive: true, force: true })
@@ -135,13 +146,14 @@ export async function sweepPartialData(opts: {
   const ours: Group[] = []
   for (const g of live) {
     if (opts.now - g.usedAt > MAX_AGE_MS && (await remove(g, 'age'))) continue
-    if (g.roomIds.length > 0) ours.push(g)
+    if (g.roomIds.length > 0 || g.usedBy.length > 0) ours.push(g)
   }
   const removed = new Set<Group>()
   // a room resumed meanwhile stops counting against the cap, like one kept from the start
-  const counts = (g: Group): boolean => !removed.has(g) && !g.roomIds.some((id) => opts.keep.has(id))
+  const counts = (g: Group): boolean => !removed.has(g) && ![...g.roomIds, ...g.usedBy].some((id) => opts.keep.has(id))
   const total = (): number => ours.reduce((n, g) => (counts(g) ? n + g.bytes : n), 0)
-  for (const g of ours.sort((a, b) => a.usedAt - b.usedAt)) {
+  // of a room's folders, its earlier items go before the one it plays (that one takes the record with it)
+  for (const g of ours.sort((a, b) => a.usedAt - b.usedAt || a.roomIds.length - b.roomIds.length)) {
     if (total() <= opts.capBytes) break
     if (await remove(g, 'cap')) removed.add(g)
   }

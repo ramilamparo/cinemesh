@@ -3,6 +3,7 @@ import { z } from 'zod'
 import { APP_CHANNELS, type AppInfo, type SessionReport } from '../shared/ipc/app.js'
 import type { MpvInfo } from '../shared/ipc/control.js'
 import { extractInvite } from '../shared/invite-link.js'
+import { SUBTITLE_EXTENSIONS, VIDEO_EXTENSIONS } from '../shared/media-files.js'
 import { type Result, err, ok } from '../shared/result.js'
 import { SettingsSchema, type SettingsPatch } from '../shared/settings.js'
 import type { DeepLinks } from './deep-links.js'
@@ -23,9 +24,6 @@ interface Deps {
   /** a validated session report from our renderer (the tray, hide-on-close and the quit prompt follow it) */
   onSessionReport: (report: SessionReport) => void
 }
-
-const VIDEO_EXTENSIONS = ['mkv', 'mp4', 'm4v', 'webm', 'mov', 'avi', 'ts', 'm2ts']
-const SUBTITLE_EXTENSIONS = ['srt', 'ass', 'ssa', 'vtt']
 
 // Only the shape is checked here; values are validated by mergeSettings against the full schema.
 // (A .partial() schema would not do: zod 4 fills defaults into omitted keys and reset other settings.)
@@ -76,17 +74,28 @@ export function registerIpc({ settings, theme, deepLinks, mpv, onSessionReport }
       title: 'Choose a video to share',
       properties: ['openFile'],
       filters: [
-        { name: 'Videos', extensions: VIDEO_EXTENSIONS },
+        { name: 'Videos', extensions: [...VIDEO_EXTENSIONS] },
         { name: 'All files', extensions: ['*'] },
       ],
     })
     return r.canceled ? null : (r.filePaths[0] ?? null)
   })
+  handle(APP_CHANNELS.pickVideos, none, async () => {
+    const r = await dialog.showOpenDialog({
+      title: 'Choose videos for the playlist',
+      properties: ['openFile', 'multiSelections'],
+      filters: [
+        { name: 'Videos', extensions: [...VIDEO_EXTENSIONS] },
+        { name: 'All files', extensions: ['*'] },
+      ],
+    })
+    return r.canceled ? [] : r.filePaths
+  })
   handle(APP_CHANNELS.pickSubtitles, none, async () => {
     const r = await dialog.showOpenDialog({
       title: 'Add subtitle files',
       properties: ['openFile', 'multiSelections'],
-      filters: [{ name: 'Subtitles', extensions: SUBTITLE_EXTENSIONS }],
+      filters: [{ name: 'Subtitles', extensions: [...SUBTITLE_EXTENSIONS] }],
     })
     return r.canceled ? [] : r.filePaths
   })

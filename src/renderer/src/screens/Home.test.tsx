@@ -112,6 +112,21 @@ describe('Home', () => {
     ])
   })
 
+  it('hosts several videos as a playlist, in episode order', async () => {
+    m = await mountApp('home', {
+      pickedVideos: ['/v/Show.S01E10.mkv', '/v/Show.S01E2.mkv', '/v/Show.S01E1.mkv'],
+    })
+    await click(byRole(m.container, 'button', 'Host a video…'))
+    const list = byRole(m.container, 'list', 'Playlist')
+    expect(text(list)).toMatch(/E1\.mkv.*E2\.mkv.*E10\.mkv/)
+    expect(text(m.container)).toContain('Subtitle files for Show.S01E1.mkv')
+    await click(byRole(m.container, 'button', 'Remove Show.S01E2.mkv'))
+    await click(byRole(m.container, 'button', 'Start hosting'))
+    expect(callsOf(m.fake, 'session.host')).toEqual([
+      { videoPath: '/v/Show.S01E1.mkv', subtitlePaths: [], more: ['/v/Show.S01E10.mkv'] },
+    ])
+  })
+
   it('runs the network test and shows the hint', async () => {
     m = await mountApp('home')
     await click(byRole(m.container, 'button', 'Test network'))

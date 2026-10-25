@@ -98,6 +98,7 @@ const app: AppApi = {
   getTheme: () => invoke(APP_CHANNELS.getTheme),
   onTheme: (cb) => push(APP_PUSH.theme, cb),
   pickVideo: () => invoke(APP_CHANNELS.pickVideo),
+  pickVideos: () => invoke(APP_CHANNELS.pickVideos),
   pickSubtitles: () => invoke(APP_CHANNELS.pickSubtitles),
   pickFolder: (defaultPath) => invoke(APP_CHANNELS.pickFolder, defaultPath ?? null),
   pickMpv: () => invoke(APP_CHANNELS.pickMpv),

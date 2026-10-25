@@ -94,6 +94,8 @@ export const NET_POLICIES: Readonly<Record<string, BusPolicy>> = {
   'room.join-via': {},
   'room.hb': {},
   'session.announce': { hostOnly: true, sticky: true },
+  // the room's playlist (ADR 0011): enforced by every member, also one that never loads it
+  'session.playlist': { hostOnly: true, sticky: true },
   'sync.state': { hostOnly: true, sticky: true },
   'sync.intentResult': { hostOnly: true },
 }

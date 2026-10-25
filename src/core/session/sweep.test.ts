@@ -46,7 +46,13 @@ function age(paths: string[], ageMs: number): void {
 }
 
 /** A viewer room record plus its session.json pointing at `transferDir`, last used `ageMs` ago. */
-async function viewerRoom(transferDir: string, ageMs: number, joinedAgoMs = ageMs): Promise<string> {
+async function viewerRoom(
+  transferDir: string,
+  ageMs: number,
+  joinedAgoMs = ageMs,
+  /** other playlist items' folders (ADR 0011) */
+  items: string[] = [],
+): Promise<string> {
   const id = hex(++seq, 16)
   await store.save({
     id,
@@ -72,6 +78,18 @@ async function viewerRoom(transferDir: string, ageMs: number, joinedAgoMs = ageM
       infoHash: transferDir.slice(-40),
       saveDir: join(transferDir, '..', '..'),
       transferDir,
+      ...(items.length > 0
+        ? {
+            playlist: [transferDir, ...items].map((d, i) => ({
+              id: hex(i, 12),
+              name: `ep${String(i)}.mkv`,
+              fileSize: 1,
+              infoHash: d.slice(-40),
+              transferDir: d,
+              progress: 1,
+            })),
+          }
+        : {}),
       updatedAt: now - ageMs,
     }),
   )
@@ -342,6 +360,45 @@ describe('sweepPartialData', () => {
     const room = await viewerRoom(old, 8 * DAY)
     expect(await sweep({ capBytes: 1, signal: AbortSignal.abort() })).toEqual([])
     expect(existsSync(old)).toBe(true)
+    expect(await store.load(room)).not.toBeNull()
+  })
+})
+
+describe('sweepPartialData with playlists (ADR 0011 §8)', () => {
+  it("keeps a room's other items as long as the room, and sweeps them with it", async () => {
+    const ep1 = partial(downloads, hex(11, 40), MIB, 9 * DAY)
+    const ep2 = partial(downloads, hex(12, 40), MIB, DAY)
+    const room = await viewerRoom(ep2, DAY, DAY, [ep1])
+    // the room was used yesterday: its first episode stays, however old its files are
+    expect(await sweep()).toEqual([])
+    expect(existsSync(ep1)).toBe(true)
+
+    const old1 = partial(downloads, hex(13, 40), MIB, 9 * DAY)
+    const old2 = partial(downloads, hex(14, 40), MIB, 9 * DAY)
+    const oldRoom = await viewerRoom(old2, 9 * DAY, 9 * DAY, [old1])
+    const swept = await sweep()
+    expect(swept.map((s) => s.dir).sort()).toEqual([old1, old2].sort())
+    expect(existsSync(old1) || existsSync(old2)).toBe(false)
+    expect(await store.load(oldRoom)).toBeNull()
+    expect(await store.load(room)).not.toBeNull()
+  })
+
+  it("never touches a kept room's other items", async () => {
+    const ep1 = partial(downloads, hex(21, 40), MIB, 9 * DAY)
+    const ep2 = partial(downloads, hex(22, 40), MIB, 9 * DAY)
+    const room = await viewerRoom(ep2, 9 * DAY, 9 * DAY, [ep1])
+    expect(await sweep({ keep: [room] })).toEqual([])
+    expect(existsSync(ep1) && existsSync(ep2)).toBe(true)
+  })
+
+  it("an earlier item's folder swept for the cap leaves the room's record", async () => {
+    const ep1 = partial(downloads, hex(31, 40), 2 * MIB, 3 * DAY)
+    const ep2 = partial(downloads, hex(32, 40), MIB, DAY)
+    const room = await viewerRoom(ep2, DAY, DAY, [ep1])
+    // both count as used when the room was: the earlier item goes first, and the room stays resumable
+    const swept = await sweep({ capBytes: 2.5 * MIB })
+    expect(swept.map((s) => [s.dir, s.roomIds])).toEqual([[ep1, []]])
+    expect(existsSync(ep2)).toBe(true)
     expect(await store.load(room)).not.toBeNull()
   })
 })

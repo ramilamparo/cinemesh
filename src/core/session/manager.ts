@@ -3,6 +3,7 @@ import { access, mkdir, readFile, rename, rm, stat, unlink, writeFile } from 'no
 import { basename, dirname, join, resolve } from 'node:path'
 import { setTimeout as delay } from 'node:timers/promises'
 import { z } from 'zod'
+import { MAX_PLAYLIST_ITEMS } from '../../shared/media-files.js'
 import type { MpvInfo } from '../../shared/ipc/control.js'
 import type {
   CoreDiagnostics,
@@ -27,6 +28,7 @@ import { freeBytes } from '../transfer/disk.js'
 import { type ResumedExport, dropExport, exportPending, pendingExport, resumeExport } from '../transfer/save-file.js'
 import type { MpvChoice, SessionDeps } from './base-session.js'
 import { HostSession } from './host-session.js'
+import { ItemIdSchema } from './playlist-wire.js'
 import { type SessionFileData, SessionFile, readSessionFile, sessionFilePath } from './session-file.js'
 import { SweepKeep, isPartialDir, sweepPartialData } from './sweep.js'
 import { ViewerSession } from './viewer-session.js'
@@ -661,7 +663,17 @@ export class SessionManager {
         const s = await this.begin(() => HostSession.start(this.sessionDeps(), p))
         return { roomId: s.roomId, invite: s.room.invite().link }
       },
-      (raw) => z.object({ videoPath: z.string().min(1), subtitlePaths: z.array(z.string().min(1)).max(16) }).parse(raw),
+      (raw) =>
+        z
+          .object({
+            videoPath: z.string().min(1),
+            subtitlePaths: z.array(z.string().min(1)).max(16),
+            more: z
+              .array(z.string().min(1))
+              .max(MAX_PLAYLIST_ITEMS - 1)
+              .optional(),
+          })
+          .parse(raw),
     )
 
     r.handle(
@@ -782,6 +794,70 @@ export class SessionManager {
         return null
       },
       (raw) => z.object({ n: z.number().int().min(2).max(12) }).parse(raw),
+    )
+
+    // ---- playlist (host) ----
+    const itemId = z.object({ id: ItemIdSchema })
+    r.handle(
+      'playlist.add',
+      async (p) => ({ added: await this.host().add(p.videoPaths) }),
+      (raw) => z.object({ videoPaths: z.array(z.string().min(1)).min(1).max(MAX_PLAYLIST_ITEMS) }).parse(raw),
+    )
+    r.handle(
+      'playlist.remove',
+      async (p) => {
+        await this.host().remove(p.id)
+        return null
+      },
+      (raw) => itemId.parse(raw),
+    )
+    r.handle(
+      'playlist.move',
+      (p) => {
+        this.host().move(p.id, p.toIndex)
+        return null
+      },
+      (raw) => z.object({ id: ItemIdSchema, toIndex: z.number().int().min(0).max(MAX_PLAYLIST_ITEMS) }).parse(raw),
+    )
+    r.handle(
+      'playlist.play',
+      async (p) => {
+        await this.host().play(p.id)
+        return null
+      },
+      (raw) => itemId.parse(raw),
+    )
+    r.handle(
+      'playlist.next',
+      async () => {
+        await this.host().next()
+        return null
+      },
+      (raw) => empty.parse(raw),
+    )
+    r.handle(
+      'playlist.prev',
+      async () => {
+        await this.host().prev()
+        return null
+      },
+      (raw) => empty.parse(raw),
+    )
+    r.handle(
+      'playlist.setAutoAdvance',
+      (p) => {
+        this.host().setAutoAdvance(p.on)
+        return null
+      },
+      (raw) => z.object({ on: z.boolean() }).parse(raw),
+    )
+    r.handle(
+      'playlist.cancelAdvance',
+      () => {
+        this.host().cancelAdvance()
+        return null
+      },
+      (raw) => empty.parse(raw),
     )
 
     // ---- sync ----
@@ -971,6 +1047,12 @@ export class SessionManager {
       // the segments of a save a quit cut off are half of that video: Finish saving needs them (Cancel saving first)
       if (await this.savingIn(transferDirOf(file))) throw new CodedError('busy', SAVE_PENDING)
       await rm(file.transferDir, { recursive: true, force: true })
+      // the room's other playlist items go with it (ADR 0011 §8)
+      for (const e of file.playlist ?? []) {
+        if (e.transferDir && isPartialDir(e.transferDir) && !(await this.savingIn(resolve(e.transferDir)))) {
+          await rm(e.transferDir, { recursive: true, force: true })
+        }
+      }
       await this.deps.store.remove(rec.id)
     }
   }

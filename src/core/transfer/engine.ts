@@ -22,6 +22,7 @@ import { CodedError } from '../../shared/result.js'
 import { SourceFiles } from './source-files.js'
 import { type PacedStream, type PacerState, UploadPacer } from './upload-pacer.js'
 import { UploadScheduler } from './upload-scheduler.js'
+import type { HostUplink, UplinkMember } from './uplink.js'
 
 /** JoinConfirm's space check (see resume.ts): bytes a resume can skip, read-only. */
 export { trustedBytes } from './resume.js'
@@ -142,6 +143,11 @@ export const MAX_HASH_FAIL_PIECES = 8
 /** The viewer's copy of the session manifest (plan §4.2 "Viewer storage"), beside meta.torrent; a resume reads it. */
 export const MANIFEST_FILE = 'manifest.bin'
 /**
+ * Host, an item viewers fetch ahead (shared uplink tier 1): held requests a wire got nothing for in this long are
+ * refused, well inside the viewer's 30 s request timeout (WebTorrent's PIECE_TIMEOUT drops the wire after it).
+ */
+export const BACKGROUND_MAX_HOLD_MS = 10_000
+/**
  * WebTorrent's only sign of a downloaded piece that failed its hash check (torrent.js:2010, 3.0.21): the piece is
  * reset and fetched again, nothing else is emitted. Pinned with the version; an integration test fails if it changes.
  */
@@ -200,6 +206,14 @@ export class TransferEngine extends EventEmitter<TransferEvents> {
   /** host: requests released just in time, urgent first, at the rate below (ADR 0006); created at 'ready' */
   private uploadScheduler: UploadScheduler | null = null
   private uploadPacer: UploadPacer | null = null
+  /** host, playlist: the uplink this torrent shares with the room's other items, and this torrent's tier in it */
+  private uplink: HostUplink | null = null
+  private uplinkTier: 0 | 1 = 0
+  private uplinkLeave: (() => void) | null = null
+  private readonly uplinkMember: UplinkMember = {
+    scheduler: () => this.uploadScheduler,
+    streams: () => this.pacedStreams(),
+  }
   /** host wire -> its connection's UDX stream; null once known not to be one */
   private readonly udxOfWire = new WeakMap<Wire, UdxStream | null>()
   private groupPlan: PlayheadPlan | null = null
@@ -229,9 +243,22 @@ export class TransferEngine extends EventEmitter<TransferEvents> {
    * Rejects with code 'cancelled' when destroy()/leave() ran before the torrent was ready. The upload limit
    * is taken now; a setUploadLimit() during the start wins over it.
    */
-  async startHost(prepared: PreparedTorrent, opts: { uploadLimitKBps: number | null }): Promise<void> {
+  async startHost(
+    prepared: PreparedTorrent,
+    opts: {
+      uploadLimitKBps: number | null
+      /**
+       * A playlist's shared uplink (ADR 0011 §5): its pacer and bucket instead of this torrent's own; `tier` 0 for the
+       * item playing, 1 for one viewers fetch ahead.
+       */
+      uplink?: HostUplink
+      tier?: 0 | 1
+    },
+  ): Promise<void> {
     this.begin('host')
     this.uploadLimitKBps = opts.uploadLimitKBps
+    this.uplink = opts.uplink ?? null
+    this.uplinkTier = opts.tier ?? 0
     const run = this.hostStart(prepared)
     this.starting = run.catch(() => undefined)
     return run
@@ -376,6 +403,12 @@ export class TransferEngine extends EventEmitter<TransferEvents> {
    * KiB/s; null or 0 = unlimited. Kept for a client that does not exist yet. A host enforces it in its upload
    * scheduler (with the pacer's rate, whichever is lower); a viewer in WebTorrent's upload throttle.
    */
+  /** Host with a shared uplink: whether this torrent is the item playing (0) or one fetched ahead (1). */
+  setTier(tier: 0 | 1): void {
+    this.uplinkTier = tier
+    this.uplink?.setTier(this.uplinkMember, tier)
+  }
+
   setUploadLimit(kbps: number | null): void {
     this.uploadLimitKBps = kbps
     if (this.role === 'host') this.uploadScheduler?.setRate(this.uploadRateBps())
@@ -592,6 +625,7 @@ export class TransferEngine extends EventEmitter<TransferEvents> {
     this.scheduler?.destroy()
     this.revealer?.destroy()
     this.uploadPacer?.destroy()
+    this.uplinkLeave?.()
     this.uploadScheduler?.destroy()
     this.downloadGate?.destroy()
     this.pieceSource?.destroy()
@@ -666,7 +700,7 @@ export class TransferEngine extends EventEmitter<TransferEvents> {
         memberOf: (wire) => this.memberOf(t, wire),
         // its budget R and its urgent wait follow what the host really sends at: the limit or the paced rate
         uploadLimitBps: () => (this.uploadLimitKBps ? this.uploadLimitKBps * 1024 : null),
-        pacedBps: () => this.uploadPacer?.rateBps ?? null,
+        pacedBps: () => (this.uplink ? this.uplink.pacedBps : (this.uploadPacer?.rateBps ?? null)),
         uploadBps: () => t.uploadSpeed,
       })
       if (this.groupPlan) revealer.setPlan(this.groupPlan)
@@ -676,13 +710,27 @@ export class TransferEngine extends EventEmitter<TransferEvents> {
       revealer.start()
       this.revealer = revealer
       // after the Revealer's 'wire' listener: a request is offered to its onArrival before it is held
+      const uplink = this.uplink
       const uploads = new UploadScheduler(t, {
         memberOf: (wire) => this.memberOf(t, wire),
         classOf: (piece) => revealer.classOf(piece),
         transport: (wire) => this.transportOf(t, wire),
         onArrival: (wire, piece) => revealer.onArrival(wire, piece),
+        ...(uplink
+          ? {
+              bucket: uplink.bucket,
+              mayRelease: () => uplink.mayRelease(this.uplinkMember),
+              maxHoldMs: () => (this.uplinkTier === 1 ? BACKGROUND_MAX_HOLD_MS : null),
+            }
+          : {}),
       })
       this.uploadScheduler = uploads
+      if (uplink) {
+        this.uplinkLeave = uplink.register(this.uplinkMember, this.uplinkTier)
+        uploads.setRate(this.uploadRateBps())
+        uploads.start()
+        return
+      }
       this.uploadPacer = new UploadPacer({
         apply: () => uploads.setRate(this.uploadRateBps()),
         sentBytes: () => uploads.sentBytes,
@@ -696,6 +744,7 @@ export class TransferEngine extends EventEmitter<TransferEvents> {
 
   /** Host: the upload limit or the paced rate, whichever is lower, bytes/s; null = neither applies. */
   private uploadRateBps(): number | null {
+    if (this.uplink) return this.uplink.rateBps()
     const limit = this.uploadLimitKBps ? this.uploadLimitKBps * 1024 : null
     const paced = this.uploadPacer?.rateBps ?? null
     if (limit === null || paced === null) return limit ?? paced
@@ -738,6 +787,7 @@ export class TransferEngine extends EventEmitter<TransferEvents> {
     this.torrentClosed = true
     this.revealer?.destroy()
     this.uploadPacer?.destroy()
+    this.uplinkLeave?.()
     this.uploadScheduler?.destroy()
     this.downloadGate?.destroy()
     for (const s of this.unattachedStreams.splice(0)) s.destroy()
@@ -881,12 +931,12 @@ export class TransferEngine extends EventEmitter<TransferEvents> {
       ...(this.role === 'host' && this.distinctServedBytes > 0
         ? { dupFactor: this.servedBytes / this.distinctServedBytes }
         : {}),
-      ...(this.uploadPacer
+      ...(this.uploadPacer || (this.uplink && this.uploadScheduler)
         ? {
             uplink: {
               rateBps: this.uploadRateBps(),
-              queueMs: this.uploadPacer.queueMs,
-              state: this.uploadPacer.state,
+              queueMs: this.uplink ? this.uplink.queueMs : (this.uploadPacer?.queueMs ?? null),
+              state: this.uplink ? this.uplink.state : (this.uploadPacer?.state ?? 'start'),
             },
           }
         : {}),

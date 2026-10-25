@@ -300,3 +300,54 @@
   justify-content: space-between;
   gap: 8px;
 }
+
+/* The playlist (PlaylistPanel): one row per item, the one playing marked. */
+.playlist {
+  margin: 0;
+  padding: 0 0 0 24px;
+  display: flex;
+  flex-direction: column;
+  gap: 6px;
+  max-height: 320px;
+  overflow-y: auto;
+}
+
+.playlistItem {
+  display: grid;
+  grid-template-columns: minmax(0, 1fr) auto;
+  grid-template-areas:
+    'name actions'
+    'meta actions';
+  column-gap: 8px;
+  row-gap: 2px;
+  align-items: center;
+  padding: 4px 6px;
+  border-radius: 6px;
+}
+
+.playlistItem[aria-current='true'] {
+  background: color-mix(in srgb, var(--accent) 12%, transparent);
+}
+
+.playlistName {
+  grid-area: name;
+  overflow: hidden;
+  text-overflow: ellipsis;
+  white-space: nowrap;
+  font-weight: 500;
+}
+
+.playlistMeta {
+  grid-area: meta;
+  display: flex;
+  flex-wrap: wrap;
+  align-items: center;
+  gap: 6px;
+  font-size: 12px;
+}
+
+.playlistActions {
+  grid-area: actions;
+  display: flex;
+  gap: 4px;
+}

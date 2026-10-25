@@ -61,6 +61,8 @@ describe('parseIntent', () => {
     expect(parseIntent('{"t":"seek","pos":12.5,"seq":4}')).toEqual({ t: 'seek', pos: 12.5, seq: 4 })
     expect(parseIntent('{"t":"seek-rel","delta":-5,"seq":5}')).toEqual({ t: 'seek-rel', delta: -5, seq: 5 })
     expect(parseIntent('{"t":"resync","seq":6}')).toEqual({ t: 'resync', seq: 6 })
+    expect(parseIntent('{"t":"next","seq":7}')).toEqual({ t: 'next', seq: 7 })
+    expect(parseIntent('{"t":"prev","seq":8}')).toEqual({ t: 'prev', seq: 8 })
   })
   it('rejects malformed intents', () => {
     expect(parseIntent('{"t":"seek","seq":1}')).toBeNull()

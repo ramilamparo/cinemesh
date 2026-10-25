@@ -23,10 +23,13 @@ interface Internals {
   settings: Settings
   current: {
     isPreparing(): boolean
-    transfer: {
-      client: { _uploadLimit: number } | null
-      uploadScheduler: { stats(): { rateBps: number | null } } | null
-    }
+    /** the playlist item playing (ADR 0011), and its seeding transfer once it seeds */
+    current: {
+      transfer: {
+        client: { _uploadLimit: number } | null
+        uploadScheduler: { stats(): { rateBps: number | null } } | null
+      } | null
+    } | null
     room: Room
     syncEngine(): SyncEngine | null
   } | null
@@ -153,13 +156,14 @@ describe.skipIf(!HAVE_FFMPEG)('host session: lifecycle', () => {
     const set = (uploadLimitKBps: number | null): void =>
       host.manager.updateSettings({ ...internals(host).settings, uploadLimitKBps })
     // the host's limit is its upload scheduler's rate (no viewer here, so no paced rate); WebTorrent's throttle is off
-    const limit = (): number | null | undefined => internals(host).current?.transfer.uploadScheduler?.stats().rateBps
-    const throttle = (): number | undefined => internals(host).current?.transfer.client?._uploadLimit
+    const transfer = () => internals(host).current?.current?.transfer
+    const limit = (): number | null | undefined => transfer()?.uploadScheduler?.stats().rateBps
+    const throttle = (): number | undefined => transfer()?.client?._uploadLimit
 
     await host.client.request('session.host', { videoPath: video, subtitlePaths: [] })
     // indexing and hashing still lie ahead, so there is no seeding client yet to take the change
     expect(internals(host).current?.isPreparing()).toBe(true)
-    expect(internals(host).current?.transfer.client).toBeNull()
+    expect(transfer() ?? null).toBeNull()
     set(300)
     await host.client.until('session', (s) => s.phase === 'in-room')
     // seeding started after the change: it must start at the new limit

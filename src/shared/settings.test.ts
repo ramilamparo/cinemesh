@@ -12,6 +12,7 @@ describe('settings', () => {
       startMode: { kind: 'buffered', seconds: 10 },
       admission: 'open',
       maxMembers: 8,
+      autoAdvance: true,
     })
     expect(s.relayKey).toBeNull()
     expect(s.hashWorkers).toBe(2)
@@ -61,6 +62,25 @@ describe('the desync warning setting', () => {
     for (const ms of [499, 30_001, 1500.5, -1, 1]) {
       expect(() => mergeSettings(defaultSettings(), { desyncWarnMs: ms })).toThrow()
     }
+  })
+})
+
+describe('the playlist settings', () => {
+  it('transfer other items and advance by default, also for a settings file from before them', () => {
+    const { settings, valid } = parseSettings({ theme: 'dark', hostDefaults: { maxMembers: 4 } })
+    expect(valid).toBe(true)
+    expect(settings).toMatchObject({ playlistBackgroundDownload: true, playlistBackgroundUpload: true })
+    expect(settings.hostDefaults.autoAdvance).toBe(true)
+  })
+
+  it('turn off one at a time', () => {
+    const s = mergeSettings(defaultSettings(), {
+      playlistBackgroundUpload: false,
+      hostDefaults: { autoAdvance: false },
+    })
+    expect(s).toMatchObject({ playlistBackgroundDownload: true, playlistBackgroundUpload: false })
+    expect(s.hostDefaults).toMatchObject({ autoAdvance: false, maxMembers: 8 })
+    expect(() => mergeSettings(defaultSettings(), { playlistBackgroundDownload: 'yes' as never })).toThrow()
   })
 })
 

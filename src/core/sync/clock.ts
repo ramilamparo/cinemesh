@@ -89,6 +89,11 @@ export interface ClockClientOptions {
   datagramUsable(): boolean
   /** θ̂ changed; jumped means by >= JUMP_MS (or the first estimate). */
   onOffset(theta: number, jumped: boolean): void
+  /**
+   * An estimate of the same host process to carry on from (a playlist's next item runs a new engine against the
+   * same host clock); a fresh one otherwise.
+   */
+  estimator?: OffsetEstimator
 }
 
 /**
@@ -96,7 +101,7 @@ export interface ClockClientOptions {
  * Falls back to bus pings after 6 consecutive datagram losses, or whenever datagrams are unusable.
  */
 export class ClockClient {
-  readonly estimator = new OffsetEstimator()
+  readonly estimator: OffsetEstimator
   private timer: TimerHandle | null = null
   private readonly outstanding = new Map<number, { t0: number; via: PingVia; timer: TimerHandle }>()
   private nextId = 1
@@ -105,7 +110,9 @@ export class ClockClient {
   private losses = 0
   private fallback = false
 
-  constructor(private readonly o: ClockClientOptions) {}
+  constructor(private readonly o: ClockClientOptions) {
+    this.estimator = o.estimator ?? new OffsetEstimator()
+  }
 
   get offset(): number | null {
     return this.estimator.offset

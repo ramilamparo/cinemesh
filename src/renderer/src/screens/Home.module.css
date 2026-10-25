@@ -42,6 +42,24 @@
   gap: 4px;
 }
 
+.videoList {
+  margin: 0;
+  padding-left: 22px;
+  display: flex;
+  flex-direction: column;
+  gap: 4px;
+  max-height: 220px;
+  overflow-y: auto;
+}
+
+.videoList li > span {
+  overflow: hidden;
+  text-overflow: ellipsis;
+  white-space: nowrap;
+  min-width: 0;
+}
+
+.videoList li,
 .subList li {
   display: flex;
   align-items: center;

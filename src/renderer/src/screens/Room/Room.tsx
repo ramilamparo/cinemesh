@@ -1,4 +1,4 @@
-import { useState } from 'react'
+import { useEffect, useState } from 'react'
 import type { LeaveData } from '../../../../shared/ipc/core'
 import { formatBehindS } from '../../../../shared/peer-warnings'
 import { wt } from '../../bridge'
@@ -15,6 +15,7 @@ import { CopyInviteButton } from './CopyInviteButton'
 import { HostPanel } from './HostPanel'
 import { LocalPanel } from './LocalPanel'
 import { PeerList } from './PeerList'
+import { PlaylistPanel } from './PlaylistPanel'
 import { Transport } from './Transport'
 import styles from './Room.module.css'
 
@@ -74,6 +75,7 @@ export function Room(): React.JSX.Element {
         <div className={styles.columns}>
           <PeerList />
           <div className={styles.side}>
+            <PlaylistPanel />
             <LocalPanel />
             {isHost ? <HostPanel /> : <ConnectionPanel />}
           </div>
@@ -225,6 +227,64 @@ export function DesyncBanner(): React.JSX.Element | null {
   )
 }
 
+/** Wall-clock ms, refreshed every `ms` while `on`: a countdown's seconds. */
+function useNow(on: boolean, ms = 250): number {
+  const [now, setNow] = useState(() => Date.now())
+  useEffect(() => {
+    if (!on) return
+    const t = setInterval(() => setNow(Date.now()), ms)
+    return () => clearInterval(t)
+  }, [on, ms])
+  return now
+}
+
+/**
+ * A playlist's next video at an item's end: the countdown to it (PlaylistEvent.advance, the host can start it now
+ * or cancel it), or for the host a Play next button when the room does not move on by itself.
+ */
+function NextUp({ isHost }: { isHost: boolean }): React.JSX.Element | null {
+  const playlist = useApp((s) => s.core.playlist)
+  const advance = playlist?.advance ?? null
+  const now = useNow(advance !== null)
+  if (!playlist) return null
+  const at = playlist.items.findIndex((i) => i.current)
+  const upcoming = advance
+    ? playlist.items.find((i) => i.id === advance.nextId)
+    : playlist.items.slice(at + 1).find((i) => !isHost || i.host?.state === 'ready')
+  if (!upcoming) return null
+  if (!advance) {
+    return isHost ? (
+      <div className="row">
+        <button type="button" className="primary" onClick={() => void call('playlist.play', { id: upcoming.id })}>
+          Play next: {upcoming.name}
+        </button>
+      </div>
+    ) : null
+  }
+  const left = Math.max(0, Math.ceil((advance.at - now) / 1000))
+  return (
+    <div className="row" data-testid="next-up">
+      <span role="status">
+        Next: <strong>{upcoming.name}</strong> in {left} s
+      </span>
+      {isHost && (
+        <>
+          <button
+            type="button"
+            className="primary small"
+            onClick={() => void call('playlist.play', { id: upcoming.id })}
+          >
+            Play now
+          </button>
+          <button type="button" className="small" onClick={() => void call('playlist.cancelAdvance', {})}>
+            Cancel
+          </button>
+        </>
+      )}
+    </div>
+  )
+}
+
 /** The video reached its end (sync mode 'ended') while the room is still open. */
 function EndedCard({ isHost }: { isHost: boolean }): React.JSX.Element {
   const progress = useApp((s) => s.core.transfer?.progress ?? 0)
@@ -240,6 +300,7 @@ function EndedCard({ isHost }: { isHost: boolean }): React.JSX.Element {
   return (
     <section className={`card ${styles.ended}`} aria-labelledby="ended-heading">
       <h2 id="ended-heading">The video has ended</h2>
+      <NextUp isHost={isHost} />
       {isHost ? (
         <div className="row">
           <button type="button" className="primary" onClick={() => void playAgain()}>

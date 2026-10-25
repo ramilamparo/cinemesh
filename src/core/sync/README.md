@@ -45,6 +45,16 @@ engine.stop()                          // cancels every timer and subscription; 
 
 `engine.group` (host only) and `engine.member` are public for diagnostics and tests.
 
+### Playlists (ADR 0011 §4)
+
+A playlist runs one engine per item, each with its own `syncEpoch`. Two options exist for that:
+
+- **`acceptEpoch: () => number | null`** (viewer). The engine applies only states, bus and StateFast, of that epoch;
+  null applies any. The session returns the current playlist item's epoch, or -1 once the host moved on. Without it,
+  the next item's first datagram could seek the previous file before `session.playlist` arrives.
+- **`clockEstimator`** (viewer). It hands `engine.clockEstimator()` to the next engine, whose `ClockClient` keeps that
+  estimate instead of starting over (the host process is the same).
+
 ### Events (`SyncEngineEvents`)
 
 | Event      | Payload                   | Notes                                                                                                                                                                                                                                                                                                                         |

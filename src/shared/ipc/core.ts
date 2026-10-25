@@ -112,7 +112,14 @@ type Empty = Record<string, never>
 
 export interface CoreRequests {
   'app.ping': { params: Empty; result: { pong: true; versions: Versions } }
-  'session.host': { params: { videoPath: string; subtitlePaths: string[] }; result: { roomId: string; invite: string } }
+  /**
+   * `more` (added): further videos for the playlist, after the first, in order; each takes the subtitle files next
+   * to it that share its name (ADR 0011).
+   */
+  'session.host': {
+    params: { videoPath: string; subtitlePaths: string[]; more?: string[] }
+    result: { roomId: string; invite: string }
+  }
   'session.join': { params: { invite: string }; result: { roomId: string } }
   'session.confirmJoin': { params: { dir: string }; result: null }
   'session.resume': { params: { roomId: string }; result: { roomId: string } }
@@ -164,6 +171,23 @@ export interface CoreRequests {
     params: { roomId: string; giveUp?: boolean }
     result: { outcome: 'finished' | 'waiting' | 'rejoin'; path?: string }
   }
+  /**
+   * Added, host only ('not-host' otherwise): the room's playlist (ADR 0011). add appends videos in the order given
+   * (each with the subtitle files next to it that share its name), refused with 'playlist-full' past 100 items or one
+   * bus message, and 'duplicate' for a video (with the same subtitles) already listed. remove refuses the current
+   * item ('current'). play switches to a prepared item ('not-ready' while it prepares); next / prev to the item after
+   * / before the current one ('no-item' at either end).
+   */
+  'playlist.add': { params: { videoPaths: string[] }; result: { added: number } }
+  'playlist.remove': { params: { id: string }; result: null }
+  'playlist.move': { params: { id: string; toIndex: number }; result: null }
+  'playlist.play': { params: { id: string }; result: null }
+  'playlist.next': { params: Empty; result: null }
+  'playlist.prev': { params: Empty; result: null }
+  /** Moving on by itself a few seconds after an item ends (Settings hostDefaults.autoAdvance is the default). */
+  'playlist.setAutoAdvance': { params: { on: boolean }; result: null }
+  /** Stops the countdown to the next item (PlaylistEvent.advance) until the room next reaches an end. */
+  'playlist.cancelAdvance': { params: Empty; result: null }
   'net.test': { params: Empty; result: NatReport }
   'diagnostics.get': { params: Empty; result: CoreDiagnostics }
 }
@@ -345,6 +369,38 @@ export interface PlayerEvent {
   }
 }
 
+/**
+ * Added (ADR 0011): the room's playlist, on host and viewers. A room without one (an older host) sends none.
+ * `advance`: the countdown to the next item after the current one ended; `at` is wall-clock ms (Date.now()).
+ */
+export interface PlaylistEvent {
+  rev: number
+  currentId: string | null
+  autoAdvance: boolean
+  advance: { nextId: string; at: number } | null
+  items: PlaylistItemView[]
+}
+
+export type PlaylistPrepareState = 'queued' | 'indexing' | 'hashing' | 'ready' | 'error'
+/**
+ * A viewer's own copy of an item: 'none' (nothing yet), 'waiting' (queued behind earlier items, or the setting is
+ * off), 'downloading', 'complete', 'no-space' (the save folder cannot take it), 'error'.
+ */
+export type PlaylistLocalState = 'none' | 'waiting' | 'downloading' | 'complete' | 'no-space' | 'error'
+
+export interface PlaylistItemView {
+  id: string
+  name: string
+  fileSize: number
+  /** null until the host has indexed it */
+  durationS: number | null
+  current: boolean
+  /** host: preparing it (indexing and hashing); `pct` 0..1 */
+  host?: { state: PlaylistPrepareState; pct: number; error?: string }
+  /** viewer: this machine's download of it; `progress` 0..1 */
+  local?: { state: PlaylistLocalState; progress: number; downBps: number }
+}
+
 export interface NoticeEvent {
   level: 'info' | 'warn' | 'error'
   code: string
@@ -365,6 +421,7 @@ export interface CoreEvents {
   transfer: TransferEvent
   tracks: TracksEvent
   player: PlayerEvent
+  playlist: PlaylistEvent
   notice: NoticeEvent
 }
 

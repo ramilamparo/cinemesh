@@ -9,6 +9,7 @@ import type { BusPolicy } from '../net/bus.js'
 import type { MemberView, Room, RoomState } from '../net/room.js'
 import { DATAGRAM_SYNC } from '../net/wire.js'
 import { PLAYER_ERRORS, type SubtitleSpec } from '../player/player-controller.js'
+import type { CarryPlan } from '../player/track-carry.js'
 import type {
   BusPort,
   Clock,
@@ -24,7 +25,7 @@ import type {
   Unsubscribe,
 } from '../sync/ports.js'
 import type { SyncBusMessage, SyncState } from '../sync/protocol.js'
-import type { PlayerLike } from './player-like.js'
+import type { PlayerLike, PlayerLikeEvents } from './player-like.js'
 
 // Adapters from the real modules to the sync engine's ports (src/core/sync/ports.ts, README "Port adapters").
 
@@ -99,38 +100,70 @@ export function frameSeconds(containerFps: unknown): number {
   return Math.min(MAX_FRAME_S, 1 / containerFps)
 }
 
+export interface PlayerPortOptions {
+  subtitles: () => SubtitleSpec[]
+  title: string | null
+  log: Log
+  /**
+   * The tracks to start a new file with (a playlist's next item): handed to every load, the player applies it to a
+   * file other than the one it has loaded only.
+   */
+  carry?: () => CarryPlan | null
+  /** the media's duration, for a FakePlayer (a real player reads it from the file) */
+  durationS?: number | null
+}
+
 export class PlayerPortAdapter implements PlayerPort {
   private readonly events = new EventEmitter()
   /** load() calls so far: only the latest one's failure is reported */
   private loads = 0
+  private readonly offs: (() => void)[] = []
 
   constructor(
     private readonly player: PlayerLike,
-    private readonly opts: { subtitles: () => SubtitleSpec[]; title: string | null; log: Log },
+    private readonly opts: PlayerPortOptions,
   ) {
+    const on = <E extends keyof PlayerLikeEvents>(event: E, fn: (...a: PlayerLikeEvents[E]) => void): void => {
+      player.on(event, fn as never)
+      this.offs.push(() => player.off(event, fn as never))
+    }
     // show-app, close and resync are not playback intents: the session handles them (resync is local only)
-    player.on('intent', (i) => {
+    on('intent', (i) => {
       if (i.kind === 'play' || i.kind === 'pause') this.fire('intent', { kind: i.kind })
       else if (i.kind === 'seek' && typeof i.pos === 'number') this.fire('intent', { kind: 'seek', posS: i.pos })
     })
-    player.on('playbackRestart', () => this.fire('playbackRestart', undefined))
-    player.on('audioReconfig', () => this.fire('audioReconfig', undefined))
-    player.on('external-change', (c) => this.fire('externalChange', { kind: c.kind }))
-    player.on('eof', (on) => {
-      if (on) this.fire('eof', undefined)
+    on('playbackRestart', () => this.fire('playbackRestart', undefined))
+    on('audioReconfig', () => this.fire('audioReconfig', undefined))
+    on('external-change', (c) => this.fire('externalChange', { kind: c.kind }))
+    on('eof', (reached) => {
+      if (reached) this.fire('eof', undefined)
     })
-    player.on('property', (name, value) => {
+    on('property', (name, value) => {
       if (name === 'paused-for-cache') this.fire('buffering', value === true)
       this.fire('state', this.snapshot())
     })
-    player.on('state', () => this.fire('state', this.snapshot()))
+    on('state', () => this.fire('state', this.snapshot()))
+  }
+
+  /** Detaches from the player: a playlist switch replaces the engine, and with it this adapter. */
+  dispose(): void {
+    for (const off of this.offs.splice(0)) off()
+    this.events.removeAllListeners()
   }
 
   load(src: string, opts: { startS: number; paused: boolean }): void {
     const seq = ++this.loads
     const o = this.opts
+    const carry = o.carry?.() ?? null
     attempt(() =>
-      this.player.load(src, { start: opts.startS, paused: opts.paused, title: o.title, subtitles: o.subtitles() }),
+      this.player.load(src, {
+        start: opts.startS,
+        paused: opts.paused,
+        title: o.title,
+        subtitles: o.subtitles(),
+        ...(carry ? { carry } : {}),
+        ...(o.durationS ? { durationS: o.durationS } : {}),
+      }),
     ).catch((e: unknown) => {
       this.opts.log('player load failed', e)
       // No playback-restart will come for it (another client's file replaced it, mpv could not open it, or

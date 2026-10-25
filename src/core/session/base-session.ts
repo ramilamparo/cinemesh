@@ -21,6 +21,7 @@ import type { Room, RoomState } from '../net/room.js'
 import type { RoomStore } from '../net/identity.js'
 import type { OscPeer, OscStatus } from '../player/osc-bridge.js'
 import { type MpvBinary, PlayerController, type SubtitleSpec } from '../player/player-controller.js'
+import type { CarryPlan } from '../player/track-carry.js'
 import { type PeerSync, SyncEngine, type SyncEngineOptions } from '../sync/engine.js'
 import type { MediaPort, TransferPort } from '../sync/ports.js'
 import type { PeerTransferStats } from '../transfer/engine.js'
@@ -76,6 +77,9 @@ export abstract class BaseSession {
   protected sessionEvent: SessionEvent
   protected player: PlayerHolder | null = null
   protected sync: SyncEngine | null = null
+  /** the running engine's player adapter: replaced with the engine (a playlist switch), so its listeners go too */
+  private playerPort: PlayerPortAdapter | null = null
+  private peersTimer = false
   protected readonly clock = createClock()
   protected readonly timers: ReturnType<typeof setInterval>[] = []
   protected readonly unsubs: (() => void)[] = []
@@ -179,6 +183,7 @@ export abstract class BaseSession {
     holder.on('intent', (i) => {
       if (i.kind === 'show-app') this.deps.control.showApp()
       else if (i.kind === 'resync' && this.role === 'viewer') this.resyncFromOsc()
+      else if ((i.kind === 'next' || i.kind === 'prev') && this.role === 'host') this.stepFromOsc(i.kind)
     })
     holder.on('state', (next) => {
       if (next === 'closedByUser')
@@ -248,6 +253,9 @@ export abstract class BaseSession {
     this.onPlayerReplaced()
   }
 
+  /** The host's `>` / `<` in the player: a playlist's next or previous item (HostSession). */
+  protected stepFromOsc(_kind: 'next' | 'prev'): void {}
+
   /** After a player swap: subclasses reload their source. */
   protected abstract onPlayerReplaced(): void
 
@@ -266,6 +274,11 @@ export abstract class BaseSession {
     transfer: TransferPort
     host?: SyncEngineOptions['host']
     subtitles: () => SubtitleSpec[]
+    /** a playlist's next item: the tracks to start it with, and (viewer) the epoch and clock estimate to use */
+    carry?: () => CarryPlan | null
+    acceptEpoch?: SyncEngineOptions['acceptEpoch']
+    clockEstimator?: SyncEngineOptions['clockEstimator']
+    durationS?: number | null
   }): SyncEngine {
     const player = this.player
     if (!player) throw new Error('player first')
@@ -275,6 +288,14 @@ export abstract class BaseSession {
     }
     // per-origin rates for what members send, before the engine listens (and on members that only forward)
     defineSyncPolicies(this.room)
+    const playerPort = new PlayerPortAdapter(player, {
+      subtitles: opts.subtitles,
+      title: this.sessionEvent.fileName,
+      log,
+      ...(opts.carry ? { carry: opts.carry } : {}),
+      ...(opts.durationS !== undefined ? { durationS: opts.durationS } : {}),
+    })
+    this.playerPort = playerPort
     const engine = new SyncEngine({
       role: this.role,
       selfId: s.self,
@@ -284,13 +305,15 @@ export abstract class BaseSession {
       desyncWarnMs: this.deps.settings().desyncWarnMs,
       ports: {
         clock: this.clock,
-        player: new PlayerPortAdapter(player, { subtitles: opts.subtitles, title: this.sessionEvent.fileName, log }),
+        player: playerPort,
         bus: new BusPortAdapter(this.room, s.hostKey, log),
         datagram: new DatagramPortAdapter(this.room),
         media: opts.media,
         transfer: opts.transfer,
       },
       ...(opts.host ? { host: opts.host } : {}),
+      ...(opts.acceptEpoch ? { acceptEpoch: opts.acceptEpoch } : {}),
+      ...(opts.clockEstimator ? { clockEstimator: opts.clockEstimator } : {}),
     })
     this.sync = engine
     engine.on('sync', (e) => {
@@ -302,7 +325,23 @@ export abstract class BaseSession {
     engine.on('notice', (n) => this.notice(n))
     engine.on('peers', (peers) => this.onSyncPeers(peers))
     engine.start()
-    this.every(PEERS_MS, () => this.emitPeers())
+    if (!this.peersTimer) {
+      this.peersTimer = true
+      this.every(PEERS_MS, () => this.emitPeers())
+    }
+    return engine
+  }
+
+  /**
+   * Stops the running engine, and its player adapter with it (a playlist switch starts the next item's engine). The
+   * player keeps what it shows, paused: the next engine loads the next file.
+   */
+  protected stopSync(): SyncEngine | null {
+    const engine = this.sync
+    this.sync = null
+    engine?.stop()
+    this.playerPort?.dispose()
+    this.playerPort = null
     return engine
   }
 
@@ -444,14 +483,14 @@ export abstract class BaseSession {
     for (const t of this.timers) clearInterval(t)
     try {
       for (const u of this.unsubs) u()
-      this.sync?.stop()
+      this.stopSync()
       await this.player?.quit().catch(() => undefined)
       await this.player?.dispose().catch(() => undefined)
       this.clock.dispose()
       await this.file?.flush()
     } finally {
       // whatever failed above, the UI must not keep a dead room's state and the computer may sleep again
-      for (const e of ['peers', 'playback', 'sync', 'timeline', 'transfer', 'tracks', 'prepare'] as const) {
+      for (const e of ['peers', 'playback', 'sync', 'timeline', 'transfer', 'tracks', 'prepare', 'playlist'] as const) {
         this.deps.clearEvent(e)
       }
       this.deps.control.power(false)

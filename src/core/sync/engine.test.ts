@@ -1,7 +1,8 @@
 import { describe, expect, it } from 'vitest'
 import { EventLoop, NodeClock, rng } from '../../../test/sync/sim/loop.js'
 import type { NoticeEvent, PlaybackEvent, SyncEvent } from '../../shared/ipc/core.js'
-import { type PeerSync, SyncEngine } from './engine.js'
+import { OffsetEstimator } from './clock.js'
+import { type PeerSync, SyncEngine, type SyncEngineOptions } from './engine.js'
 import { MEMBER } from './member.js'
 import type { PlayerSnapshot, PresenceEvent } from './ports.js'
 import { type Cause, parseBusMessage, type SyncBusMessage, type SyncState, type SyncStatus } from './protocol.js'
@@ -36,7 +37,11 @@ interface Rates {
 }
 
 /** A viewer engine on a still clock, fed bus messages by hand; pings go over the bus. */
-function viewer(player: PlayerSnapshot = NO_PLAYER, rates: Partial<Rates> = {}) {
+function viewer(
+  player: PlayerSnapshot = NO_PLAYER,
+  rates: Partial<Rates> = {},
+  extra: Pick<SyncEngineOptions, 'clockEstimator' | 'acceptEpoch'> = {},
+) {
   const r: Rates = { needBps: 0, rateBps: 0, etaToEofS: 0, ...rates }
   const loop = new EventLoop()
   const clock = new NodeClock(loop, rng(1), { offsetMs: 2e6, skewPpm: 0, timerLateMs: 0 })
@@ -49,6 +54,7 @@ function viewer(player: PlayerSnapshot = NO_PLAYER, rates: Partial<Rates> = {}) 
     selfName: 'Sam',
     hostId: HOST,
     nudge: true,
+    ...extra,
     ports: {
       clock,
       player: {
@@ -515,5 +521,33 @@ describe('SyncEngine: the desync warning', () => {
     expect(h.engine.member.desyncState).toBeNull()
     expect(h.engine.syncEvent()).not.toHaveProperty('desync')
     h.engine.stop()
+  })
+})
+
+describe('a playlist item switch (ADR 0011 §4)', () => {
+  it("applies only the item's own epoch, and any epoch without a playlist", () => {
+    let epoch: number | null = 9
+    const v = viewer(NO_PLAYER, {}, { acceptEpoch: () => epoch })
+    v.state({ syncEpoch: 7, seq: 5 })
+    expect(v.engine.member.state).toBeNull()
+    v.state({ syncEpoch: 9, seq: 1 })
+    expect(v.engine.member.state?.syncEpoch).toBe(9)
+    epoch = null
+    v.state({ syncEpoch: 7, seq: 6 })
+    expect(v.engine.member.state?.syncEpoch).toBe(7)
+  })
+
+  it("keeps the replaced engine's clock estimate instead of starting over", () => {
+    const first = viewer()
+    first.answer(5e6)
+    const theta = first.offset()
+    expect(theta).not.toBeNull()
+    const est = first.engine.clockEstimator()
+    expect(est).toBeInstanceOf(OffsetEstimator)
+    first.engine.stop()
+    const next = viewer(NO_PLAYER, {}, { ...(est ? { clockEstimator: est } : {}) })
+    expect(next.offset()).toBe(theta)
+    // a fresh engine has none until its first pong
+    expect(viewer().offset()).toBeNull()
   })
 })

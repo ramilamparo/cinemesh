@@ -165,6 +165,21 @@ our `loadfile` reply.
   400 loads, half of them under CPU load, but nothing promises it), and a load of the same URL changes nothing.
 - An mpv without entry ids (none we support: 0.39 has them) counts every file as ours.
 
+### Tracks across files: `LoadOptions.carry` (ADR 0011 §7)
+
+`load(url, {carry})` for a file other than the loaded one starts it on the tracks `track-carry.ts` matched in the
+next file's manifest:
+
+- **Matching:** the same title, else the same language and forced flag; subtitles off stays off.
+- **How they ride:** `aid=`/`alang=`/`sid=` go in the loadfile's per-file options, as a same-file reload's do, so
+  nothing switches tracks after the file opened.
+- **External subtitle:** a matched one is added with `sub-add … select`.
+- **Check:** at file-loaded the selected tracks are compared with the match (title, language). A mismatch picks the
+  matched track by title and language in mpv's list.
+
+The manifest's order stands in for mpv's per-type ids: each type counts from 1 in container order. For the same file
+`carry` is ignored.
+
 ### Who reloads: `selfReload`
 
 After a restart (crash, `reopen()`) and on an external path change, the file has to be loaded again. By
@@ -207,6 +222,9 @@ restart of the same file, reset by a `load()` of another file, and ignores lists
 file another client loaded.
 
 ### OSC messages (`osc-bridge.ts`, `wt-osc.lua`)
+
+Intents `next` and `prev` (added): the host's `>` and `<`, a playlist's next and previous item. The session decides,
+and toasts when there is none.
 
 - core → OSC: `script-message-to wt_osc <kind> <json>`.
   - `init {v, client, theme, perms, strings, watchdogS, persistentStrip}`;

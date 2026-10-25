@@ -96,6 +96,7 @@ const STATE_EVENTS = [
   'transfer',
   'tracks',
   'player',
+  'playlist',
 ] as const satisfies readonly (keyof CoreState)[]
 
 const MAX_TOASTS = 5
@@ -188,6 +189,8 @@ export function connectStore(wt: WtBridge): () => void {
           // a stale "The host is preparing the video"
           const phase = (data as CoreEvents['session']).phase
           if (phase === 'idle' || phase === 'error') delete core.prepare
+          // nor last room's playlist in the next one (an older host sends none)
+          if (phase === 'idle') delete core.playlist
           const prev = s.core.session?.phase
           const leavingFrom = phase !== 'leaving' ? null : prev === 'leaving' ? s.leavingFrom : (prev ?? null)
           return { core, leavingFrom }

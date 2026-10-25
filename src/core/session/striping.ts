@@ -12,7 +12,11 @@ import type { HashFailWatch } from './hash-fails.js'
 // The same report carries the viewer's hash failures (plan §4.2 "Source-change watchdog"), once it has any: the host
 // warns when its served bytes stop matching what it prepared (hash-fails.ts).
 
-/** A viewer's report to the host: `{v: 1, linked, urgent, hashFails?}`, addressed to the host. */
+/**
+ * A viewer's report to the host: `{v: 1, infoHash?, linked, urgent, hashFails?}`, addressed to the host. `infoHash`
+ * names the torrent it is about (a playlist runs one per item, ADR 0011 §3); a report without one, from an older
+ * viewer, is about the current item.
+ */
 export const TRANSFER_LINKS = 'transfer.links'
 /** a viewer reports at least this often (a host that missed one, or restarted, has it again within a second) */
 export const REPORT_MS = 1000
@@ -30,6 +34,11 @@ const MEMBER_ID = /^[0-9a-f]{64}$/
 
 export const TransferLinksSchema = z.object({
   v: z.literal(1),
+  /** added within v 1, which older hosts' schema strips */
+  infoHash: z
+    .string()
+    .regex(/^[0-9a-f]{40}$/)
+    .optional(),
   linked: z.array(z.string().regex(MEMBER_ID)).max(MAX_LINKED),
   urgent: z.array(z.number().int().nonnegative()).max(MAX_REPORTED_URGENT),
   /** absent until the viewer has one; added within v 1, which older hosts' schema strips */
@@ -65,8 +74,10 @@ export function reportTransferLinks(opts: {
     trailing = null
     if (stopped) return
     lastAt = performance.now()
+    const infoHash = transfer.infoHash
     const body: TransferLinks = {
       v: 1,
+      ...(infoHash ? { infoHash } : {}),
       linked: transfer
         .linkedPeers()
         .filter((id) => id !== room.self)
@@ -103,22 +114,31 @@ export function reportTransferLinks(opts: {
   }
 }
 
+/** What a report goes into: the transfer seeding that torrent, and the hash-failure watch of its item. */
+export interface LinkTarget {
+  transfer: TransferEngine
+  hashFails?: HashFailWatch
+}
+
 /**
  * Host: takes viewers' reports into its transfer (setViewerLinks, setViewerUrgent) and their hash failures into
  * `hashFails`, and forgets a viewer whose link closed (removeViewer). Reports are validated: only from admitted
  * members, rate-limited per sender, linked kept to admitted members, urgent and failed pieces to pieces of the
- * torrent. Returns the stop function.
+ * torrent. `target` picks the transfer by the report's infoHash (undefined: the current item's); a report about a
+ * torrent nothing seeds is dropped. Returns the stop function.
  */
 export function collectTransferLinks(opts: {
   room: Room
-  transfer: TransferEngine
+  target: (infoHash: string | undefined) => LinkTarget | null
+  /** every transfer that may hold a viewer's lanes, for a viewer whose link closed */
+  all: () => readonly LinkTarget[]
   log: CoreLog
-  hashFails?: HashFailWatch
 }): () => void {
-  const { room, transfer, log, hashFails } = opts
+  const { room, target, all, log } = opts
   room.defineMessage(TRANSFER_LINKS, {})
   const buckets = new Map<string, { tokens: number; at: number }>()
-  let pieceCount = 0
+  // each torrent's piece count, known once seeding started (the host has every piece)
+  const pieceCounts = new WeakMap<TransferEngine, number>()
   const allow = (from: string): boolean => {
     const now = performance.now()
     const b = buckets.get(from) ?? { tokens: RATE_BURST, at: now }
@@ -139,8 +159,14 @@ export function collectTransferLinks(opts: {
       log.debug(`striping: dropped a malformed ${TRANSFER_LINKS} from ${m.from.slice(0, 8)}`)
       return
     }
-    // the torrent's piece count, known once seeding started (the host has every piece)
-    pieceCount ||= transfer.pieceStates().length
+    const t = target(parsed.data.infoHash)
+    if (!t) return
+    const { transfer, hashFails } = t
+    let pieceCount = pieceCounts.get(transfer) ?? 0
+    if (pieceCount === 0) {
+      pieceCount = transfer.pieceStates().length
+      pieceCounts.set(transfer, pieceCount)
+    }
     const linked = parsed.data.linked.filter((id) => id !== m.from && members.has(id))
     const urgent = parsed.data.urgent.filter((i) => i < pieceCount)
     transfer.setViewerLinks(m.from, [...new Set(linked)])
@@ -154,8 +180,10 @@ export function collectTransferLinks(opts: {
   // its lanes went with its link: what it was given alone and did not fetch is assigned again
   const onGone = (id: string): void => {
     buckets.delete(id)
-    transfer.removeViewer(id)
-    hashFails?.remove(id)
+    for (const { transfer, hashFails } of all()) {
+      transfer.removeViewer(id)
+      hashFails?.remove(id)
+    }
   }
   room.on('peer-gone', onGone)
   return () => {

@@ -19,6 +19,8 @@ interface Internals {
   current: {
     room: Room
     manifest: Manifest | null
+    /** host: the playlist item playing (ADR 0011) */
+    current?: { manifest: Manifest | null } | null
     server: StreamServer | null
     /** a viewer's piece states (2 = verified) */
     states: Uint8Array
@@ -272,7 +274,7 @@ describe.skipIf(!HAVE_FFMPEG)('session: host-assigned striping', () => {
       const host = member('Host', root, { settings: { uploadLimitKBps: 300 } })
       const { invite } = await host.client.request('session.host', { videoPath: video, subtitlePaths: [] })
       await host.client.until('session', (s) => s.phase === 'in-room', 60_000)
-      const manifest = internals(host).current?.manifest
+      const manifest = internals(host).current?.manifest ?? internals(host).current?.current?.manifest
       if (!manifest) throw new Error('no manifest')
       const P = manifest.pieceLength
       const cues = [...new Set(manifest.seekCritical.flatMap(([a, b]) => [Math.floor(a / P), Math.floor((b - 1) / P)]))]

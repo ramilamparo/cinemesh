@@ -48,6 +48,7 @@ export const APP_CHANNELS = {
   setSettings: 'settings:set',
   getTheme: 'theme:get',
   pickVideo: 'pick:video',
+  pickVideos: 'pick:videos',
   pickSubtitles: 'pick:subtitles',
   pickFolder: 'pick:folder',
   pickMpv: 'pick:mpv',
@@ -81,6 +82,8 @@ export interface AppApi {
   getTheme(): Promise<ThemePayload>
   onTheme(cb: (t: ThemePayload) => void): () => void
   pickVideo(): Promise<string | null>
+  /** Added (playlists): several videos at once, in the order the dialog gives (the renderer sorts them). */
+  pickVideos(): Promise<string[]>
   pickSubtitles(): Promise<string[]>
   pickFolder(defaultPath?: string): Promise<string | null>
   pickMpv(): Promise<string | null>

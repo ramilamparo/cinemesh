@@ -1,60 +1,39 @@
-import { lstat, readFile } from 'node:fs/promises'
-import { join, resolve } from 'node:path'
+import { rm } from 'node:fs/promises'
+import { resolve } from 'node:path'
 import { z } from 'zod'
-import type { NoticeEvent, SessionPhase } from '../../shared/ipc/core.js'
-import { limitBps } from '../../shared/limits.js'
-import { decodeManifest } from '../../shared/media/manifest.js'
-import { MediaMap, needsFullDownload } from '../../shared/media/media-map.js'
-import { type ByteRange, KEYFRAME_MIN_GAP_MS, type KeyPoint, type Manifest } from '../../shared/media/types.js'
+import type { NoticeEvent, PlaylistEvent, PlaylistItemView, SessionPhase } from '../../shared/ipc/core.js'
 import { CodedError } from '../../shared/result.js'
-import { Playhead, type PlayheadReason as MediaPlayheadReason } from '../media/playhead.js'
-import { StreamServer } from '../media/stream-server.js'
-import { Blobs, MemoryBlobProvider, blobHash } from '../net/blobs.js'
+import { Blobs, MemoryBlobProvider } from '../net/blobs.js'
 import type { RoomRecord } from '../net/identity.js'
-import { Room, type RoomPeer, type RoomState } from '../net/room.js'
-import type { SubtitleSpec } from '../player/player-controller.js'
-import type { PlayheadReason } from '../sync/ports.js'
+import { Room, type RoomState } from '../net/room.js'
+import { type CarryChoice, captureChoice, planCarry } from '../player/track-carry.js'
+import type { OffsetEstimator } from '../sync/clock.js'
 import { type SpaceCheck, checkSpace, freeBytes } from '../transfer/disk.js'
-import { MANIFEST_FILE, type PeerTransferStats, TransferEngine, type TransferStats } from '../transfer/engine.js'
-import { trustedBytes } from '../transfer/resume.js'
 import { exportPending } from '../transfer/save-file.js'
-import { SEGMENT_BYTES } from '../transfer/segment-store.js'
+import { type Announce, AnnounceSchema, MAX_MANIFEST_BYTES, announceError } from './announce.js'
 import { BaseSession, type SessionDeps } from './base-session.js'
 import { announceName, netLog } from './common.js'
-import { type SessionFileData, SessionFile, sessionFilePath } from './session-file.js'
-import { reportTransferLinks } from './striping.js'
-import { Ewma, MediaPortAdapter, TransferPortAdapter } from './sync-ports.js'
-import { Timeline } from './timeline.js'
+import { MAX_CRITICAL_SPANS, cachedManifest, criticalSpans, crossCheck } from './media-checks.js'
+import { PLAYLIST_NAME, type PlaylistBody, type PlaylistItemBody, PlaylistSchema } from './playlist-wire.js'
+import { type PlaylistEntry, type SessionFileData, SessionFile, sessionFilePath } from './session-file.js'
+import { isPartialDir } from './sweep.js'
+import { SAVE_PENDING_THERE, type SlotEvents, ViewerSlot } from './viewer-slot.js'
+import type { Settings } from '../../shared/settings.js'
+import type { PeerTransferStats } from '../transfer/engine.js'
 
-/**
- * Decoding is linear in the manifest's size, so this caps it before anything else. Honest manifests are
- * tens of KB (a 3 h film with a 1 s GOP is about 100 KB); a 3 h all-intra file with 8 poorly interleaved
- * audio tracks and 64 tracks is 2.4 MB, and 4 MiB decodes in under 0.2 s.
- */
-export const MAX_MANIFEST_BYTES = 4 * 1024 * 1024
-
-export const AnnounceSchema = z.object({
-  v: z.literal(1),
-  infoHash: z.string().regex(/^[0-9a-f]{40}$/),
-  torrent: z.object({
-    hash: z.string().regex(/^[0-9a-f]{64}$/),
-    size: z
-      .number()
-      .int()
-      .positive()
-      .max(64 * 1024 * 1024),
-  }),
-  manifest: z.object({
-    hash: z.string().regex(/^[0-9a-f]{64}$/),
-    size: z.number().int().positive().max(MAX_MANIFEST_BYTES),
-  }),
-  name: z.string().min(1).max(512),
-  fileSize: z.number().int().nonnegative(),
-  durationMs: z.number().nonnegative(),
-})
-type Announce = z.infer<typeof AnnounceSchema>
+export {
+  AnnounceSchema,
+  MAX_CRITICAL_SPANS,
+  MAX_MANIFEST_BYTES,
+  announceError,
+  cachedManifest,
+  criticalSpans,
+  crossCheck,
+}
 
 const PreparingSchema = z.object({ stage: z.string().max(32), pct: z.number().min(0).max(1) })
+/** `infoHash` (added): the item whose file changed; absent from an older host, whose only video it was */
+const UnavailableSchema = z.object({ infoHash: z.string().nullable().optional() }).loose()
 
 const VIDEO_CHANGED: NoticeEvent = {
   level: 'warn',
@@ -69,111 +48,69 @@ const FULL_DOWNLOAD: NoticeEvent = {
   message: 'This video plays once it is fully downloaded: its format cannot be streamed.',
 }
 
-/**
- * Why an announce failed AnnounceSchema. A newer host (v > 1) may have changed any of it, so its version is
- * the answer; anything else is a host sending what no honest host sends (a manifest over MAX_MANIFEST_BYTES).
- */
-export function announceError(raw: unknown, issues: readonly { path: readonly PropertyKey[] }[]): CodedError {
-  const v = typeof raw === 'object' && raw !== null ? (raw as { v?: unknown }).v : undefined
-  if (typeof v === 'number' && v > 1) {
-    return new CodedError('update-required', 'The host uses a newer version of Cinemesh. Update the app to join.')
-  }
-  const what = issues[0]?.path.map(String).join('.') || 'announce'
-  return new CodedError(
-    'bad-session',
-    `The host sent video details this app cannot read (${what}). Ask the host to host it again.`,
-  )
-}
-
-/**
- * The manifest a previous session of this video kept in its transfer folder (plan §4.2 "Viewer storage"), when it is
- * the one announced: a regular file of that size and BLAKE2b hash, as Blobs.fetch would check it. Else null, and the
- * manifest is fetched.
- */
-export async function cachedManifest(dir: string, want: { hash: string; size: number }): Promise<Uint8Array | null> {
-  const path = join(dir, MANIFEST_FILE)
-  const st = await lstat(path).catch(() => null)
-  if (!st?.isFile() || st.size !== want.size) return null
-  const data = await readFile(path).catch(() => null)
-  return data && blobHash(data) === want.hash ? data : null
-}
-
-/** What the viewer trusts about the download: taken from the torrent itself (the infoHash commits to it). */
-interface TorrentInfo {
-  infoHash: string
-  pieceLength: number
-  pieceCount: number
-  /** video plus external subtitles */
-  length: number
-}
-
-// session.host accepts at most 16 subtitle files
-const MAX_SUBS = 16
-/** The scheduler re-selects every critical span on each replan; above this the narrowest gaps are bridged. */
-export const MAX_CRITICAL_SPANS = 256
-// What the host merely states, bounded before MediaMap or the scheduler is sized from it. An honest
-// manifest has one audio index per audio track of a poorly interleaved MP4. Track lists are metadata the
-// viewer does not use, and remuxes that keep every dub and subtitle come close to 64 tracks.
-const MAX_AUDIO_INDEXES = 32
-const MAX_TRACKS = 256
-const MAX_KEY_POINTS = 500_000
-
 export type ViewerInput = { invite: string } | { resume: { record: RoomRecord; file: SessionFileData | null } }
 
-const PLAYHEAD_REASONS: Record<PlayheadReason, MediaPlayheadReason> = {
-  seek: 'seek',
-  catchup: 'catchup',
-  rendezvous: 'join',
-}
-
 const TICK_MS = 1000
-const BLOB_TIMEOUT_MS = 60_000
-/** A folder where a save of this video that a quit, a crash or a missing drive cut off is still pending. */
-const SAVE_PENDING_THERE =
-  'This video is still being saved into that folder from last time. Choose another folder, or finish or cancel that save in Recent rooms first.'
+/** a switch whose item could not be fetched tries again after this */
+const SWITCH_RETRY_MS = 5000
+/** items played earlier that stay open to share with others (Settings: Share other playlist videos) */
+const MAX_KEPT_OPEN = 2
+/** an item shared besides the one playing gets at least this much of an upload limit, KiB/s */
+const MIN_SHARE_KBPS = 16
+
+/** What a viewer follows: the host's current playlist item, or (an older host) its one announced video. */
+interface Target {
+  id: string | null
+  announce: Announce
+}
 
 /**
  * Joining (plan §5.2 "How a viewer's session starts"): admitted → sticky session.announce → torrent and
  * manifest by blob.get (BLAKE2b-verified) → JoinConfirm (folder, free space) → download into segments,
  * stream server, player, sync. Resuming skips the confirmation and reuses the journal.
+ *
+ * With a playlist (ADR 0011) the viewer follows session.playlist's current item instead: the first one goes
+ * through JoinConfirm, later ones download into the same folder (if there is space) as the host moves on, each
+ * with a sync engine of its own that applies only that item's epoch.
  */
 export class ViewerSession extends BaseSession {
   readonly role = 'viewer' as const
   private readonly abort = new AbortController()
-  private transfer: TransferEngine | null = null
-  private server: StreamServer | null = null
-  private blobs: Blobs | null = null
-  private announce: Announce | null = null
-  private torrent: Buffer | null = null
-  private manifest: Manifest | null = null
-  /** the manifest as announced (hash-checked), kept in the transfer folder for a resume */
-  private manifestBytes: Uint8Array | null = null
-  private map: MediaMap | null = null
-  private timeline: Timeline | null = null
-  private playhead: Playhead | null = null
-  private states: Uint8Array = new Uint8Array(0)
-  private readonly mediaListeners = new Set<() => void>()
+  private readonly provider = new MemoryBlobProvider()
+  private readonly blobs: Blobs
+  /** items by infoHash: the one playing, and any still open */
+  private readonly slots = new Map<string, ViewerSlot>()
+  private current: ViewerSlot | null = null
+  /** the item a join in flight is about (it follows the host until the download starts) */
+  private joinSlot: ViewerSlot | null = null
+  private playlist: PlaylistBody | null = null
+  /** the newest readable announce (all an older host sends) */
+  private announced: Announce | null = null
+  private joinStarted = false
+  private joined = false
+  private switching: Promise<void> = Promise.resolve()
+  private retryTimer: ReturnType<typeof setTimeout> | null = null
+  /** the current item could not start: its save folder lacks the space */
+  private noSpace = false
+  /** downloads started in this room, by infoHash: the session file lists them for a resume, the sweep and a leave */
+  private readonly entries = new Map<string, PlaylistEntry>()
+  /** the item downloading ahead of the one playing (Settings: Download upcoming playlist videos) */
+  private prefetch: ViewerSlot | null = null
+  private prefetchStarting = false
+  /** items that did not fit in the save folder ahead of time, or failed to start: not tried again in this room */
+  private readonly noSpaceFor = new Set<string>()
+  /** transfers being closed, by infoHash: a new start in the same folder waits for them */
+  private readonly closing = new Map<string, Promise<void>>()
+  /** the countdown to the next item, as wall-clock ms: fixed when the playlist arrives */
+  private advanceAt: { nextId: string; at: number } | null = null
+  /** items played earlier still open to share, oldest first */
+  private readonly keptOpen: ViewerSlot[] = []
   private confirm: ((dir: string) => void) | null = null
-  private fileOpened = false
-  private lastStallAt: number | null = null
-  private readonly rate = new Ewma(10)
-  private lastStats: TransferStats | null = null
-  private saveDir: string | null = null
-  /** `<saveDir>/.wt-partial/<infoHash>`, resolved, once the download starts there */
-  private transferFolder: string | null = null
-  private info: TorrentInfo | null = null
   private confirmReject: ((e: Error) => void) | null = null
   /** the folder the user confirmed: JoinConfirm stays up while the download starts, and Join can be clicked again */
   private confirmedDir: string | null = null
+  private saveDir: string | null = null
   private leaving: Promise<string | null> | null = null
-  /** WebTorrent destroys the torrent on any error it reports: the download is over for this session */
-  private transferError: CodedError | null = null
-  /** the video plays only once complete (needsFullDownload): see holdingSource */
-  private fullDownload = false
-  /** every piece verified (transfer 'done') */
-  private downloaded = false
-  /** stops the 1 Hz report of our bt lanes and blocked pieces to the host (reportTransferLinks) */
-  private stopLinks: (() => void) | null = null
 
   private constructor(
     deps: SessionDeps,
@@ -181,6 +118,8 @@ export class ViewerSession extends BaseSession {
     private readonly resumeFile: SessionFileData | null,
   ) {
     super(deps, room)
+    this.blobs = new Blobs(room, this.provider)
+    for (const e of resumeFile?.playlist ?? []) if (e.infoHash) this.entries.set(e.infoHash, e)
   }
 
   static async join(deps: SessionDeps, input: ViewerInput): Promise<ViewerSession> {
@@ -200,12 +139,14 @@ export class ViewerSession extends BaseSession {
     return session
   }
 
+  // ---- what the host says ---------------------------------------------------------------------
+
   private begin(): void {
     this.setSession({ phase: 'connecting', role: 'viewer' })
     this.unsubs.push(
       this.room.onMessage(announceName('preparing'), (m) => {
         const p = PreparingSchema.safeParse(m.body)
-        if (p.success && !this.announce && !this.unreadableAnnounce) {
+        if (p.success && !this.target() && !this.unreadableAnnounce) {
           this.deps.emit('prepare', {
             stage: 'hashing',
             bytesDone: Math.round(p.data.pct * 1000),
@@ -215,26 +156,38 @@ export class ViewerSession extends BaseSession {
           })
         }
       }),
-      this.room.onMessage(announceName('announce'), (m) => void this.onAnnounce(m.body)),
-      this.room.onMessage(announceName('unavailable'), () => this.onHostFileGone()),
+      this.room.onMessage(PLAYLIST_NAME, (m) => this.onPlaylist(m.body)),
+      this.room.onMessage(announceName('announce'), (m) => this.onAnnounce(m.body)),
+      this.room.onMessage(announceName('unavailable'), (m) => this.onHostFileGone(m.body)),
     )
+    // the playlist first: it names the epoch of the item the announce is about
+    const list = this.room.latest(PLAYLIST_NAME)
+    if (list) this.onPlaylist(list.body)
     const latest = this.room.latest(announceName('announce'))
-    if (latest) void this.onAnnounce(latest.body)
-    if (this.room.latest(announceName('unavailable'))) this.onHostFileGone()
+    if (latest) this.onAnnounce(latest.body)
+    this.checkHostFile()
   }
 
   private hostFileGone = false
   /** the first announce failed AnnounceSchema: the join failed on it */
   private unreadableAnnounce = false
 
-  private onHostFileGone(): void {
+  private checkHostFile(): void {
+    const gone = this.room.latest(announceName('unavailable'))
+    if (gone) this.onHostFileGone(gone.body)
+  }
+
+  private onHostFileGone(raw: unknown): void {
     if (this.hostFileGone || this.isStopped()) return
+    // about another item than the one playing: nothing this viewer streams changed
+    const about = UnavailableSchema.safeParse(raw).data?.infoHash
+    if (about && about !== (this.current ?? this.joinSlot)?.infoHash) return
     this.hostFileGone = true
     this.notice({
       level: 'warn',
       code: 'session.host-file-gone',
       // a video that plays only once complete has nothing that plays yet
-      message: this.holdingSource()
+      message: this.current?.holdingSource()
         ? "The host's video file changed, so the host stopped sharing it. This video plays only once fully downloaded, and only other viewers can send the rest now."
         : "The host's video file changed, so the host stopped sharing it. What you already have still plays.",
     })
@@ -244,7 +197,7 @@ export class ViewerSession extends BaseSession {
     super.onRoomState(s)
     // Only the waiting screens follow the room. The room re-emits its state all the time (host presence,
     // relay, room.state), and confirm-join, in-room or an error (a failed join too) must survive that.
-    if (this.isStopped() || this.transfer) return
+    if (this.isStopped() || this.joined || this.joinSlot?.started) return
     if (this.phase !== 'connecting' && this.phase !== 'pending-admission') return
     // Admitted but nothing to confirm yet (the host may still be preparing): back to 'connecting', where
     // the join screen shows the host's prepare progress.
@@ -257,7 +210,35 @@ export class ViewerSession extends BaseSession {
     if (next && this.phase !== next) this.setSession({ phase: next })
   }
 
-  private async onAnnounce(raw: unknown): Promise<void> {
+  private onPlaylist(raw: unknown): void {
+    if (this.joinCancelled()) return
+    const parsed = PlaylistSchema.safeParse(raw)
+    if (!parsed.success) {
+      // a newer host's playlist: its announce still names the item playing
+      this.deps.log.debug(`unreadable playlist: ${parsed.error.issues[0]?.message ?? '?'}`)
+      return
+    }
+    const p = parsed.data
+    if (this.playlist && p.rev === this.playlist.rev && p.current?.id === this.playlist.current?.id) return
+    this.playlist = p
+    this.advanceAt = p.advance ? { nextId: p.advance.nextId, at: Date.now() + p.advance.inMs } : null
+    this.dropRemoved(p)
+    this.emitPlaylist()
+    this.onTargetChanged()
+    this.pumpPrefetch()
+  }
+
+  /** Items the host took off the playlist: their transfers stop, and a partial download goes with them. */
+  private dropRemoved(p: PlaylistBody): void {
+    const listed = new Set(p.items.flatMap((i) => (i.infoHash ? [i.infoHash] : [])))
+    for (const slot of [...this.slots.values()]) {
+      if (slot === this.current || slot === this.joinSlot || listed.has(slot.infoHash)) continue
+      if (this.prefetch === slot) this.prefetch = null
+      void this.close(slot, slot.downloaded ? 'keep' : 'delete')
+    }
+  }
+
+  private onAnnounce(raw: unknown): void {
     // leaving, or the room closed: whoever stopped us has set the phase
     if (this.joinCancelled()) return
     const parsed = AnnounceSchema.safeParse(raw)
@@ -267,7 +248,7 @@ export class ViewerSession extends BaseSession {
       return
     }
     if (!parsed.success) {
-      if (this.announce) return // a re-announce we cannot read changes nothing we have
+      if (this.announced || this.playlist) return // a re-announce we cannot read changes nothing we have
       // without this the join would wait on 'Connecting…' forever
       this.unreadableAnnounce = true
       const err = announceError(raw, parsed.error.issues)
@@ -276,65 +257,139 @@ export class ViewerSession extends BaseSession {
       return
     }
     const a = parsed.data
-    if (this.announce) {
-      if (this.announce.infoHash !== a.infoHash) this.notice(VIDEO_CHANGED)
+    const before = this.announced
+    this.announced = a
+    // a host with a playlist says which item plays in session.playlist (with its epoch); the announce follows it
+    if (this.playlist) return
+    if (before && before.infoHash !== a.infoHash) {
+      this.notice(VIDEO_CHANGED)
       return
     }
-    this.announce = a
-    this.setSession({ fileName: a.name, fileSize: a.fileSize, durationS: a.durationMs / 1000 })
+    this.onTargetChanged()
+  }
+
+  /** The playlist's current item, else the announced video (an older host). */
+  private target(): Target | null {
+    const p = this.playlist
+    if (p?.current) {
+      const item = p.items.find((i) => i.id === p.current?.id)
+      const a = item ? announceOf(item) : null
+      if (item && a) return { id: item.id, announce: a }
+    }
+    return this.announced ? { id: null, announce: this.announced } : null
+  }
+
+  /**
+   * The epoch the engine of `slot` applies: the playlist's, while that is still the item playing; none once the
+   * host moved on (that engine is about to stop); any without a playlist.
+   */
+  private epochFor(slot: ViewerSlot): number | null {
+    const p = this.playlist
+    if (!p) return null
+    const item = p.current ? p.items.find((i) => i.id === p.current?.id) : undefined
+    return p.current && item?.infoHash === slot.infoHash ? p.current.syncEpoch : -1
+  }
+
+  private onTargetChanged(): void {
+    if (this.joinCancelled()) return
+    const t = this.target()
+    if (!t) return
+    if (!this.joinStarted) {
+      this.joinStarted = true
+      void this.join()
+      return
+    }
+    if (!this.joined) {
+      // still joining: JoinConfirm follows the host to its new item
+      if (this.joinSlot?.infoHash !== t.announce.infoHash && this.phase === 'confirm-join') void this.retarget()
+      return
+    }
+    if (this.current?.infoHash !== t.announce.infoHash) this.queueSwitch()
+  }
+
+  private slotFor(t: Target): ViewerSlot {
+    const have = this.slots.get(t.announce.infoHash)
+    if (have) return have
+    const slot = new ViewerSlot(t.id, t.announce, this.deps.log)
+    this.slots.set(t.announce.infoHash, slot)
+    return slot
+  }
+
+  // ---- joining (the first item) ---------------------------------------------------------------
+
+  private async join(): Promise<void> {
     try {
-      const provider = new MemoryBlobProvider()
-      this.blobs = new Blobs(this.room, provider)
-      const signal = AbortSignal.any([this.abort.signal, AbortSignal.timeout(BLOB_TIMEOUT_MS)])
-      // a resume knows its folder: the manifest kept there at the join, when it is still the announced one
-      const saved = this.resumeFile?.saveDir
-      const blobs = this.blobs
-      const [torrent, manifestBytes] = await Promise.all([
-        blobs.fetch(a.torrent.hash, { size: a.torrent.size, signal }),
-        (saved ? cachedManifest(join(saved, '.wt-partial', a.infoHash), a.manifest) : Promise.resolve(null)).then(
-          (kept) => kept ?? blobs.fetch(a.manifest.hash, { size: a.manifest.size, signal }),
-        ),
-      ])
-      const parsedTorrent = await import('parse-torrent').then((m) => m.default(torrent))
-      const manifest = decodeManifest(manifestBytes)
+      let slot = await this.loadTarget()
+      const dir = await this.chooseDir(slot)
       this.assertLive()
-      crossCheck(a, parsedTorrent, manifest)
-      provider.add(torrent) // re-serve to other viewers
-      provider.add(manifestBytes)
-      this.torrent = torrent
-      this.info = {
-        infoHash: parsedTorrent.infoHash,
-        pieceLength: parsedTorrent.pieceLength,
-        pieceCount: parsedTorrent.pieces.length,
-        length: parsedTorrent.length,
-      }
-      this.manifest = manifest
-      this.manifestBytes = manifestBytes
-      this.map = new MediaMap(manifest)
-      this.timeline = new Timeline(this.map)
-      this.fullDownload = needsFullDownload(manifest)
-      this.setSession({
-        media: {
-          container: manifest.container,
-          seekMode: manifest.seekMode,
-          fullDownload: this.fullDownload,
-          interleave: manifest.interleave,
-        },
+      // the host may have moved on while we confirmed: the download is for the item playing now
+      slot = await this.loadTarget()
+      this.saveDir = dir
+      await this.startItem(slot, { carry: null, first: true })
+      this.joined = true
+      this.setSession({ phase: 'in-room' })
+      this.emitTimeline()
+      if (slot.holdingSource()) this.notice(FULL_DOWNLOAD)
+      // the playhead slides while playing: L1 follows the room position (plan §4.3 "Playhead adapter")
+      this.every(TICK_MS, () => {
+        const engine = this.sync
+        const pos = engine?.roomPosition() ?? null
+        if (engine?.syncEvent()?.mode === 'playing' && pos !== null) this.current?.playhead?.set(pos, 'tick')
       })
-      const dir = await this.chooseDir(a)
-      this.assertLive()
-      await this.startDownload(dir)
+      // a switch asked for while the download started
+      this.onTargetChanged()
     } catch (e) {
       // leaving, or the room closed under us: whoever stopped us has set the phase
       if (this.joinCancelled()) return
       // a torrent that died while joining is the cause, whatever the await it broke reported
-      const err = this.transferError ?? e
+      const err = this.joinSlot?.transferError ?? e
       this.deps.log.error('joining failed', err)
       const message = err instanceof Error ? err.message : String(err)
       this.setSession({
         phase: 'error',
         error: { code: err instanceof CodedError ? err.code : 'join-failed', message },
       })
+    }
+  }
+
+  /** The current target's torrent and manifest, fetched and checked; again while the host moves on meanwhile. */
+  private async loadTarget(): Promise<ViewerSlot> {
+    for (;;) {
+      const t = this.target()
+      if (!t) throw new CodedError('join-failed', 'The host is not sharing a video')
+      const slot = this.slotFor(t)
+      this.joinSlot = slot
+      const a = slot.announce
+      this.setSession({ fileName: a.name, fileSize: a.fileSize, durationS: a.durationMs / 1000 })
+      await slot.fetchMeta(this.blobs, this.provider, this.abort.signal, this.resumeFile?.saveDir)
+      this.assertLive()
+      if (this.target()?.announce.infoHash !== slot.infoHash) continue
+      this.setMedia(slot)
+      return slot
+    }
+  }
+
+  private setMedia(slot: ViewerSlot): void {
+    const m = slot.manifest
+    if (!m) return
+    this.setSession({
+      media: {
+        container: m.container,
+        seekMode: m.seekMode,
+        fullDownload: slot.fullDownload,
+        interleave: m.interleave,
+      },
+    })
+  }
+
+  /** In JoinConfirm, the host switched items: the confirmation is for the new one. */
+  private async retarget(): Promise<void> {
+    try {
+      const slot = await this.loadTarget()
+      if (this.phase !== 'confirm-join') return
+      await this.showConfirm(slot)
+    } catch (e) {
+      if (!this.joinCancelled()) this.deps.log.warn(`following the host's playlist while joining failed: ${String(e)}`)
     }
   }
 
@@ -346,7 +401,7 @@ export class ViewerSession extends BaseSession {
   /** Why a join in flight must stop: a leave, a closed room or a dead torrent; null to carry on. */
   private standDown(): Error | null {
     if (this.joinCancelled()) return new CodedError('cancelled', 'left the room')
-    return this.transferError
+    return this.joinSlot?.transferError ?? null
   }
 
   /** After every await on the join path. */
@@ -356,19 +411,29 @@ export class ViewerSession extends BaseSession {
   }
 
   /** JoinConfirm: wait for the user's folder (or reuse the one a resumed session saved into). */
-  private async chooseDir(a: Announce): Promise<string> {
+  private async chooseDir(slot: ViewerSlot): Promise<string> {
     if (this.resumeFile?.saveDir) return this.resumeFile.saveDir
-    const dir = this.deps.settings().downloadDir ?? this.deps.paths.downloadDir
-    const free = await freeBytes(dir).catch(() => 0)
-    const have = await this.haveBytes(dir)
-    this.assertLive()
-    this.setSession({
-      phase: 'confirm-join',
-      joinInfo: { name: a.name, size: this.info?.length ?? a.fileSize, dir, freeBytes: free, haveBytes: have },
-    })
+    await this.showConfirm(slot)
     return new Promise((resolve, reject) => {
       this.confirm = resolve
       this.confirmReject = reject
+    })
+  }
+
+  private async showConfirm(slot: ViewerSlot): Promise<void> {
+    const dir = this.deps.settings().downloadDir ?? this.deps.paths.downloadDir
+    const free = await freeBytes(dir).catch(() => 0)
+    const have = await slot.haveBytes(dir)
+    this.assertLive()
+    this.setSession({
+      phase: 'confirm-join',
+      joinInfo: {
+        name: slot.name,
+        size: slot.info?.length ?? slot.announce.fileSize,
+        dir,
+        freeBytes: free,
+        haveBytes: have,
+      },
     })
   }
 
@@ -377,28 +442,18 @@ export class ViewerSession extends BaseSession {
     return this.confirm
   }
 
-  /**
-   * Bytes a previous session in this folder already holds: verified in its journal and still in a segment
-   * file long enough for them. state.json alone is not proof: seg/ may have been deleted or cleaned since.
-   */
-  private async haveBytes(dir: string): Promise<number> {
-    const t = this.info
-    if (!t || t.pieceCount === 0) return 0
-    return trustedBytes(join(dir, '.wt-partial', t.infoHash), t)
-  }
-
   /** session.confirmJoin */
   async confirmJoin(dir: string): Promise<void> {
     if (this.alreadyConfirmed(dir)) return
-    const t = this.info
-    if (!this.confirm || !t) throw new CodedError('not-confirming', 'nothing to confirm')
+    const slot = this.joinSlot
+    const t = slot?.info
+    if (!this.confirm || !slot || !t) throw new CodedError('not-confirming', 'nothing to confirm')
     let space: SpaceCheck
     let saving: boolean
     try {
       // said here, where another folder can still be chosen; startDownload refuses it for every way in
-      saving = await exportPending(join(dir, '.wt-partial', t.infoHash))
-      const have = await this.haveBytes(dir)
-      space = await checkSpace(dir, Math.max(0, t.length - have))
+      saving = await exportPending(slot.dirIn(dir))
+      space = await checkSpace(dir, await slot.neededBytes(dir))
     } catch (e) {
       if (this.confirmWithdrawn()) return
       throw e
@@ -435,130 +490,417 @@ export class ViewerSession extends BaseSession {
     return !this.pendingConfirm() && this.joinCancelled()
   }
 
+  // ---- an item: download, player, sync --------------------------------------------------------
+
   /**
-   * Every await below is followed by assertLive(): a leave or a closed room may have run meanwhile, and
-   * whatever was created by then (transfer, server) is found and closed by leave() through the fields.
+   * Makes `slot` the item playing: its download (the first one's space was checked at the confirmation; a later
+   * one's is checked here, and an item that does not fit stays out, its member reporting disk-full), the stream
+   * server, the session file, the player (once) and a sync engine for the item's epoch.
    */
-  private async startDownload(saveDir: string): Promise<void> {
-    const a = this.announce
-    const info = this.info
-    const torrent = this.torrent
-    const manifest = this.manifest
-    const map = this.map
-    if (!a || !info || !torrent || !manifest || !map || !this.timeline) throw new Error('announce first')
-    // the infoHash parsed from the torrent, not the announce's claim (crossCheck made them equal anyway)
-    const transferDir = join(saveDir, '.wt-partial', info.infoHash)
-    // a save there that a quit cut off (this video, from any room) takes these segments: a download would race it,
-    // and a 'delete' leave would take away half of that video
-    if (await exportPending(transferDir)) throw new CodedError('busy', SAVE_PENDING_THERE)
-    this.assertLive()
-    this.saveDir = saveDir
-    this.transferFolder = resolve(transferDir)
-    const transfer = new TransferEngine()
-    this.transfer = transfer
-    // Listeners first: a complete resume emits 'done' right after joinAsViewer resolves. The transfer
-    // outlives teardown during a leave (the export runs last), so its events stand down once stopping.
-    transfer.on('pieces-changed', (st) => {
-      if (this.isStopped()) return // teardown already cleared 'timeline'
-      this.states = st
-      for (const fn of this.mediaListeners) fn()
-      this.emitTimeline()
-    })
-    transfer.on('stats', (st) => {
-      // a dead torrent reports all zeros: keep the progress it reached, with nothing moving
-      if (this.transferError) {
-        this.rate.push(0)
-        return
+  private async startItem(
+    slot: ViewerSlot,
+    opts: { carry: CarryChoice | null; first?: boolean; clockEstimator?: OffsetEstimator },
+  ): Promise<void> {
+    const saveDir = this.saveDir
+    if (!saveDir) throw new Error('confirm first')
+    this.current = slot
+    this.joinSlot = slot
+    this.noSpace = false
+    const a = slot.announce
+    this.setSession({ fileName: a.name, fileSize: a.fileSize, durationS: a.durationMs / 1000 })
+    this.setMedia(slot)
+    if (!slot.startRequested) {
+      await this.closed(slot.infoHash)
+      const space = opts.first ? null : await checkSpace(saveDir, await slot.neededBytes(saveDir))
+      this.assertLive()
+      if (space && !space.ok) {
+        this.noSpace = true
+        this.notice({
+          level: 'error',
+          code: 'playlist.no-space',
+          message: `${a.name} needs ${gb(space.neededBytes)} GB; ${gb(space.freeBytes)} GB free in your save folder. Free some space, then the host can play it again.`,
+        })
+      } else {
+        await slot.start({
+          saveDir,
+          room: this.room,
+          settings: () => this.deps.settings(),
+          events: this.slotEvents(slot),
+          live: () => this.assertLive(),
+        })
       }
-      this.lastStats = st
-      this.rate.push(st.downBps)
+    } else {
+      // started ahead and maybe still starting: that start, not a second one
+      await slot.start({
+        saveDir,
+        room: this.room,
+        settings: () => this.deps.settings(),
+        events: this.slotEvents(slot),
+        live: () => this.assertLive(),
+      })
+      this.assertLive()
+    }
+    slot.setPeers('all')
+    if (slot.started) {
+      await slot.listen(() => this.assertLive())
+      slot.report()
+    }
+    this.writeFile(slot, saveDir)
+    if (opts.first) await this.file?.flush()
+    this.assertLive()
+    this.hostFileGone = false
+    this.checkHostFile()
+
+    if (!this.player) {
+      const player = this.createPlayer({ title: a.name, subtitles: () => this.current?.subtitles() ?? [] })
+      player.on('fileLoaded', () => {
+        if (this.current) this.current.fileOpened = true
+      })
+      // mpv sits empty while the source is held, and its OSC drops toasts until it is up: say why once it
+      // is (again after a restart or a Reopen)
+      player.on('oscReady', () => {
+        if (this.current?.holdingSource() && this.sync) player.osc('toast', { text: FULL_DOWNLOAD.message })
+      })
+    }
+    const carry = opts.carry && slot.manifest ? planCarry(opts.carry, slot.manifest.tracks, slot.carrySubs()) : null
+    const engine = this.startSync({
+      subtitles: () => slot.subtitles(),
+      media: slot.mediaPort({ positionS: () => this.sync?.roomPosition() ?? 0 }),
+      transfer: slot.transferPort({
+        settings: () => this.deps.settings(),
+        noSpace: () => this.noSpace && this.current === slot,
+      }),
+      carry: () => carry,
+      acceptEpoch: () => this.epochFor(slot),
+      ...(opts.clockEstimator ? { clockEstimator: opts.clockEstimator } : {}),
+      durationS: a.durationMs / 1000,
     })
-    transfer.on('disk-low', (low) => {
-      if (this.isStopped()) return
-      this.notice(
-        low
-          ? { level: 'error', code: 'transfer.disk-low', message: 'The disk is almost full: downloading paused.' }
-          : { level: 'info', code: 'transfer.disk-ok', message: 'Disk space is available again: downloading resumed.' },
+    engine.on('sync', (e) => {
+      if (e.wait?.reason === 'buffering') slot.lastStallAt = performance.now()
+    })
+    this.giveSource()
+    this.emitPlaylist()
+  }
+
+  private slotEvents(slot: ViewerSlot): SlotEvents {
+    return {
+      pieces: () => {
+        if (this.isStopped()) return // teardown already cleared 'timeline'
+        if (slot === this.current) this.emitTimeline()
+      },
+      diskLow: (low) => {
+        if (this.isStopped()) return
+        this.notice(
+          low
+            ? { level: 'error', code: 'transfer.disk-low', message: 'The disk is almost full: downloading paused.' }
+            : {
+                level: 'info',
+                code: 'transfer.disk-ok',
+                message: 'Disk space is available again: downloading resumed.',
+              },
+        )
+      },
+      done: () => {
+        if (this.isStopped()) return
+        this.updateEntry(slot)
+        this.persistEntries()
+        this.emitPlaylist()
+        // the next item in order may download now; a complete item ahead needs no striping reports
+        queueMicrotask(() => this.pumpPrefetch())
+        if (slot !== this.current) {
+          slot.stopReporting()
+          return
+        }
+        // a held stream goes to the player now, unless the room is over for us (nothing to follow)
+        const release = slot.fullDownload && this.sync !== null
+        this.notice({
+          level: 'info',
+          code: 'transfer.done',
+          message: release ? 'The whole video is downloaded: it plays now.' : 'The whole video is downloaded.',
+        })
+        this.updatePower()
+        if (release) this.giveSource()
+      },
+      error: (e) => {
+        if (this.isStopped()) return
+        this.updatePower()
+        // in the room: tell the user; while joining, the join fails with it instead (assertLive)
+        if (this.sync && slot === this.current) {
+          this.notice({ level: 'error', code: 'transfer.failed', message: e.message })
+        }
+      },
+    }
+  }
+
+  // ---- switching items ------------------------------------------------------------------------
+
+  private queueSwitch(): void {
+    if (this.retryTimer) clearTimeout(this.retryTimer)
+    this.retryTimer = null
+    this.switching = this.switching.then(() => this.doSwitch()).catch((e: unknown) => this.switchFailed(e))
+  }
+
+  private switchFailed(e: unknown): void {
+    if (this.joinCancelled()) return
+    this.deps.log.error('switching to the next video failed', e)
+    const message = e instanceof Error ? e.message : String(e)
+    this.notice({
+      level: 'error',
+      code: 'playlist.switch-failed',
+      message: `Could not start the next video: ${message}`,
+    })
+    this.retryTimer = setTimeout(() => {
+      this.retryTimer = null
+      if (this.current?.infoHash !== this.target()?.announce.infoHash) this.queueSwitch()
+    }, SWITCH_RETRY_MS)
+    this.retryTimer.unref()
+  }
+
+  private async doSwitch(): Promise<void> {
+    if (this.joinCancelled() || !this.joined) return
+    const t = this.target()
+    if (!t || t.announce.infoHash === this.current?.infoHash) return
+    const slot = this.slotFor(t)
+    // fetched while the old item still plays (the host's next item starts with a start barrier anyway)
+    await slot.fetchMeta(this.blobs, this.provider, this.abort.signal, this.saveDir ?? undefined)
+    this.assertLive()
+    if (this.target()?.announce.infoHash !== slot.infoHash) return // moved on again: the next switch handles it
+    const choice = this.player ? captureChoice(this.player.tracks()) : null
+    const clockEstimator = this.sync?.clockEstimator() ?? undefined
+    this.stopSync()
+    void this.player?.setPaused(true).catch(() => undefined)
+    const old = this.current
+    if (old && old !== slot) await this.retire(old)
+    // an item fetched ahead (or kept open since) plays from what it has: nothing to download again
+    if (this.prefetch === slot) this.prefetch = null
+    const kept = this.keptOpen.indexOf(slot)
+    if (kept >= 0) this.keptOpen.splice(kept, 1)
+    try {
+      await this.startItem(slot, { carry: choice, ...(clockEstimator ? { clockEstimator } : {}) })
+    } catch (e) {
+      // nothing plays: the retry (switchFailed) starts the item afresh
+      this.current = null
+      this.stopSync()
+      if (!this.joinCancelled()) await this.close(slot, 'keep')
+      throw e
+    }
+    this.emitTimeline()
+    if (slot.holdingSource()) this.notice(FULL_DOWNLOAD)
+    this.pumpPrefetch()
+  }
+
+  /**
+   * The item that was playing. With Share other playlist videos on, it stays open for others still fetching it (the
+   * last MAX_KEPT_OPEN of them); else its transfer stops. Its data stays either way (going back resumes it).
+   */
+  private async retire(slot: ViewerSlot): Promise<void> {
+    this.updateEntry(slot)
+    await slot.stopServing()
+    if (this.deps.settings().playlistBackgroundUpload && slot.started && !slot.transferError) {
+      this.keptOpen.push(slot)
+      while (this.keptOpen.length > MAX_KEPT_OPEN) {
+        const oldest = this.keptOpen.shift()
+        if (oldest) await this.close(oldest, 'keep')
+      }
+      return
+    }
+    await this.close(slot, 'keep')
+  }
+
+  /** Ends an item's transfer that is not playing; its record stays in the session file. */
+  private async close(slot: ViewerSlot, data: 'keep' | 'delete'): Promise<void> {
+    this.updateEntry(slot)
+    this.slots.delete(slot.infoHash)
+    const k = this.keptOpen.indexOf(slot)
+    if (k >= 0) this.keptOpen.splice(k, 1)
+    if (data === 'delete') this.entries.delete(slot.infoHash)
+    const done = slot
+      .leave({ data })
+      .then(
+        () => undefined,
+        (e: unknown) => this.deps.log.warn(`stopping ${slot.name}: ${String(e)}`),
       )
-    })
-    transfer.on('done', () => {
-      if (this.isStopped()) return
-      // a held stream goes to the player now, unless the room is over for us (nothing to follow)
-      const release = this.holdingSource() && this.sync !== null
-      this.downloaded = true
+      .finally(() => {
+        if (this.closing.get(slot.infoHash) === done) this.closing.delete(slot.infoHash)
+      })
+    this.closing.set(slot.infoHash, done)
+    await done
+    this.file?.update({ playlist: [...this.entries.values()] })
+  }
+
+  /** Once a transfer of this item being closed is done (a new one opens the same folder and journal). */
+  private async closed(infoHash: string): Promise<void> {
+    await this.closing.get(infoHash)
+  }
+
+  // ---- downloading ahead ----------------------------------------------------------------------
+
+  /**
+   * Strict playlist order (ADR 0011 §6): once the item playing is complete, the next item after it that is not, one
+   * at a time; an item not prepared yet, or one that does not fit, stops the walk there. Settings: Download upcoming
+   * playlist videos.
+   */
+  private nextToFetch(): Target | null {
+    const p = this.playlist
+    const cur = this.current
+    if (!p || !cur?.downloaded || this.noSpace || !this.deps.settings().playlistBackgroundDownload) return null
+    const at = p.items.findIndex((i) => i.infoHash === cur.infoHash)
+    if (at < 0) return null
+    for (const item of p.items.slice(at + 1)) {
+      const a = announceOf(item)
+      if (!a || this.noSpaceFor.has(a.infoHash)) return null
+      if (this.isComplete(a.infoHash)) continue
+      return { id: item.id, announce: a }
+    }
+    return null
+  }
+
+  private isComplete(infoHash: string): boolean {
+    const slot = this.slots.get(infoHash)
+    if (slot?.started) return slot.downloaded
+    return (this.entries.get(infoHash)?.progress ?? 0) >= 1
+  }
+
+  private pumpPrefetch(): void {
+    if (!this.joined || this.isStopped() || this.prefetchStarting) return
+    const want = this.nextToFetch()
+    const had = this.prefetch
+    if (had && had.infoHash !== want?.announce.infoHash) {
+      this.prefetch = null
+      // not wanted ahead any more (the setting went off, or the host reordered): it stops, its data stays
+      if (had !== this.current && !this.keptOpen.includes(had)) void this.close(had, 'keep')
+    }
+    if (!want || this.prefetch) return
+    this.prefetchStarting = true
+    void this.startPrefetch(want)
+      .catch((e: unknown) => {
+        if (this.joinCancelled()) return
+        this.deps.log.warn(`downloading ${want.announce.name} ahead failed: ${String(e)}`)
+        // not tried again ahead (it downloads when it plays); the walk stops there, as for one that does not fit
+        this.noSpaceFor.add(want.announce.infoHash)
+        const slot = this.slots.get(want.announce.infoHash)
+        if (this.prefetch === slot) this.prefetch = null
+        if (slot && slot !== this.current) void this.close(slot, 'keep')
+      })
+      .finally(() => {
+        this.prefetchStarting = false
+        this.emitPlaylist()
+        this.pumpPrefetch()
+      })
+  }
+
+  private async startPrefetch(t: Target): Promise<void> {
+    const saveDir = this.saveDir
+    if (!saveDir) return
+    const live = (): void => {
+      if (this.joinCancelled()) throw new CodedError('cancelled', 'left the room')
+    }
+    const slot = this.slotFor(t)
+    await slot.fetchMeta(this.blobs, this.provider, this.abort.signal, saveDir)
+    live()
+    if (this.nextToFetch()?.announce.infoHash !== slot.infoHash) {
+      if (!slot.started && slot !== this.current) this.slots.delete(slot.infoHash)
+      return
+    }
+    const space = await checkSpace(saveDir, await slot.neededBytes(saveDir))
+    live()
+    if (!space.ok) {
+      this.noSpaceFor.add(slot.infoHash)
+      if (!slot.started) this.slots.delete(slot.infoHash)
       this.notice({
         level: 'info',
-        code: 'transfer.done',
-        message: release ? 'The whole video is downloaded: it plays now.' : 'The whole video is downloaded.',
+        code: 'playlist.no-space-ahead',
+        message: `${slot.name} is not downloaded ahead: it needs ${gb(space.neededBytes)} GB and ${gb(space.freeBytes)} GB are free. It downloads when it plays, if there is space then.`,
       })
-      this.updatePower()
-      if (release) this.giveSource()
-    })
-    transfer.on('error', (e) => {
-      this.deps.log.error('downloading failed', e)
-      if (this.isStopped() || this.transferError) return
-      this.transferError = new CodedError('transfer-failed', `Downloading stopped: ${e.message}`)
-      if (this.lastStats) this.lastStats = { ...this.lastStats, downBps: 0, upBps: 0, etaToEofS: null, peers: [] }
-      this.updatePower()
-      // in the room: tell the user; while joining, the join fails with it instead (assertLive)
-      if (this.sync) this.notice({ level: 'error', code: 'transfer.failed', message: this.transferError.message })
-    })
-    const s = this.deps.settings()
-    await transfer.joinAsViewer({
-      torrent,
-      ...(this.manifestBytes ? { manifest: this.manifestBytes } : {}),
-      dir: transferDir,
-      uploadLimitKBps: s.uploadLimitKBps,
-      downloadLimitKBps: s.downloadLimitKBps,
-    })
-    this.assertLive()
-    // a limit changed during the start reached an engine that may not have had a client to apply it to
-    transfer.setUploadLimit(this.deps.settings().uploadLimitKBps)
-    transfer.setDownloadLimit(this.deps.settings().downloadLimitKBps)
-    const source = transfer.streamSource
-    if (!source) throw new Error('no stream source')
-
-    const onPeer = (p: RoomPeer): void => transfer.attach(p)
-    const onGone = (id: string): void => transfer.detach(id)
-    this.room.on('peer', onPeer)
-    this.room.on('peer-gone', onGone)
-    this.unsubs.push(
-      () => this.room.off('peer', onPeer),
-      () => this.room.off('peer-gone', onGone),
-    )
-    for (const p of this.room.peers()) transfer.attach(p)
-    // host-assigned striping: the host learns our bt lanes and blocked reads (striping.ts); stops on a leave
-    // (teardown) and when the room closes (onRoomClosed)
-    this.stopLinks = reportTransferLinks({
-      room: this.room,
-      hostId: this.room.state().hostKey,
-      transfer,
-      log: this.deps.log,
-    })
-    this.unsubs.push(() => this.stopReporting())
-
-    // R6: open-critical, seek-critical (video bytes; the video sits at torrent offset 0) and the subtitle files
-    const subFiles = source.files.slice(1)
-    const critical: ByteRange[] = [
-      ...manifest.openCritical,
-      ...manifest.seekCritical,
-      ...subFiles.map((f): ByteRange => [f.offset, f.offset + f.length]),
-    ]
-    transfer.setCriticalRanges(criticalSpans(critical, info.pieceLength, info.length))
-    this.playhead = new Playhead(map, { setPlayhead: (plan) => transfer.setPlayhead(plan) })
-    this.states = transfer.pieceStates()
-
-    const server = await StreamServer.listen(source)
-    const stop = this.standDown()
-    if (stop) {
-      // a leave may already be past closing this.server
-      await server.close().catch(() => undefined)
-      throw stop
+      return
     }
-    this.server = server
-    const subtitles = (): SubtitleSpec[] =>
-      manifest.externalSubs.map((sub) => ({ url: server.url(sub.fileIndex), title: sub.title, lang: sub.lang || null }))
+    this.prefetch = slot
+    if (!slot.startRequested) {
+      await this.closed(slot.infoHash)
+      live()
+      await slot.start({
+        saveDir,
+        room: this.room,
+        settings: () => this.deps.settings(),
+        events: this.slotEvents(slot),
+        live,
+        peers: this.deps.settings().playlistBackgroundUpload ? 'all' : 'host',
+      })
+      // from the start, in order: the next item's first minutes are what it needs first
+      slot.playhead?.set(0, 'join')
+    }
+    this.updateEntry(slot)
+    this.file?.update({ playlist: [...this.entries.values()] })
+  }
 
+  override updateSettings(s: Settings): void {
+    super.updateSettings(s)
+    const share = s.playlistBackgroundUpload
+    this.prefetch?.setPeers(share ? 'all' : 'host')
+    if (!share) for (const slot of [...this.keptOpen]) void this.close(slot, 'keep')
+    this.pumpPrefetch()
+  }
+
+  /**
+   * The upload limit holds for all of this viewer's uploads: the item playing gets it whole, the others share what
+   * it leaves (each WebTorrent client throttles only itself). Every second.
+   */
+  private shareUpload(): void {
+    const limit = this.deps.settings().uploadLimitKBps
+    const cur = this.current
+    const others = [...this.slots.values()].filter((s) => s !== cur && s.started)
+    cur?.setUploadLimit(limit)
+    if (others.length === 0) return
+    if (limit === null) {
+      for (const s of others) s.setUploadLimit(null)
+      return
+    }
+    const used = (cur?.lastStats?.upBps ?? 0) / 1024
+    const each = Math.max(MIN_SHARE_KBPS, Math.floor((limit - used) / others.length))
+    for (const s of others) s.setUploadLimit(each)
+  }
+
+  // ---- the session file and the playlist view -------------------------------------------------
+
+  private updateEntry(slot: ViewerSlot): void {
+    const prev = this.entries.get(slot.infoHash)
+    this.entries.set(slot.infoHash, {
+      id: slot.id ?? prev?.id ?? slot.infoHash.slice(0, 12),
+      name: slot.name,
+      fileSize: slot.announce.fileSize,
+      infoHash: slot.infoHash,
+      ...(slot.transferFolder
+        ? { transferDir: slot.transferFolder }
+        : prev?.transferDir
+          ? { transferDir: prev.transferDir }
+          : {}),
+      progress: slot.started ? slot.progress : (prev?.progress ?? 0),
+    })
+  }
+
+  /** Every item's download as of now into session.json (a resume, the sweep and Recent rooms read it). */
+  private persistEntries(): void {
+    for (const slot of this.slots.values()) if (slot.started) this.updateEntry(slot)
+    this.file?.update({ playlist: [...this.entries.values()] })
+  }
+
+  private writeFile(slot: ViewerSlot, saveDir: string): void {
+    this.updateEntry(slot)
+    const a = slot.announce
+    const data: Partial<SessionFileData> = {
+      fileName: a.name,
+      fileSize: a.fileSize,
+      durationS: a.durationMs / 1000,
+      infoHash: slot.infoHash,
+      saveDir,
+      ...(slot.transferFolder ? { transferDir: slot.transferFolder } : {}),
+      playlist: [...this.entries.values()],
+      ...(slot.id ? { currentItemId: slot.id } : {}),
+    }
+    if (this.file) {
+      this.file.update(data, { now: true })
+      return
+    }
     this.file = new SessionFile(sessionFilePath(this.deps.paths.userData, this.roomId), {
       v: 1,
       role: 'viewer',
@@ -566,70 +908,58 @@ export class ViewerSession extends BaseSession {
       fileName: a.name,
       fileSize: a.fileSize,
       durationS: a.durationMs / 1000,
-      infoHash: info.infoHash,
-      saveDir,
-      transferDir,
+      infoHash: slot.infoHash,
       updatedAt: Date.now(),
+      ...data,
     })
-    await this.file.flush()
-    this.assertLive()
+  }
 
-    const player = this.createPlayer({ title: a.name, subtitles })
-    player.on('fileLoaded', () => (this.fileOpened = true))
-    // mpv sits empty while the source is held, and its OSC drops toasts until it is up: say why once it
-    // is (again after a restart or a Reopen)
-    player.on('oscReady', () => {
-      if (this.holdingSource() && this.sync) player.osc('toast', { text: FULL_DOWNLOAD.message })
-    })
-    const engine = this.startSync({
-      subtitles,
-      media: new MediaPortAdapter({
-        map,
-        manifest,
-        states: () => this.states,
-        fileOpened: () => this.fileOpened,
-        lastStallAtMs: () => this.lastStallAt,
-        setPlayhead: (posS, reason) => this.playhead?.set(posS, PLAYHEAD_REASONS[reason]),
-        onChange: (fn) => {
-          this.mediaListeners.add(fn)
-          return () => this.mediaListeners.delete(fn)
-        },
-        positionS: () => this.sync?.roomPosition() ?? 0,
-      }),
-      transfer: new TransferPortAdapter({
-        rateBps: () => this.rate.get(),
-        etaToEofS: () => this.lastStats?.etaToEofS ?? null,
-        coverage: () => this.timeline?.coverage(this.states) ?? null,
-        diskFull: () => this.lastStats?.diskLow ?? false,
-        // the host names it in our slow-download warning
-        downLimitBps: () => limitBps(this.deps.settings().downloadLimitKBps),
-      }),
-    })
-    engine.on('sync', (e) => {
-      if (e.wait?.reason === 'buffering') this.lastStallAt = performance.now()
-    })
-    this.giveSource()
-    // the playhead slides while playing: L1 follows the room position (plan §4.3 "Playhead adapter")
-    this.every(TICK_MS, () => {
-      if (this.sync !== engine) return // the room closed: nothing to follow (onRoomClosed)
-      const pos = engine.roomPosition()
-      if (engine.syncEvent()?.mode === 'playing' && pos !== null) this.playhead?.set(pos, 'tick')
-    })
-    this.setSession({ phase: 'in-room' })
-    this.emitTimeline()
-    if (this.holdingSource()) this.notice(FULL_DOWNLOAD)
+  private emitPlaylist(): void {
+    const p = this.playlist
+    if (!p || this.isStopped()) return
+    const ev: PlaylistEvent = {
+      rev: p.rev,
+      currentId: p.current?.id ?? null,
+      autoAdvance: p.autoAdvance,
+      advance: this.advanceAt,
+      items: p.items.map((i) => this.itemView(i, i.id === p.current?.id)),
+    }
+    this.deps.emit('playlist', ev)
+  }
+
+  private itemView(i: PlaylistItemBody, current: boolean): PlaylistItemView {
+    const slot = i.infoHash ? this.slots.get(i.infoHash) : undefined
+    const kept = i.infoHash ? this.entries.get(i.infoHash) : undefined
+    const progress = slot?.started ? slot.progress : (kept?.progress ?? 0)
+    let state: NonNullable<PlaylistItemView['local']>['state'] = progress >= 1 ? 'complete' : 'none'
+    if (slot?.transferError) state = 'error'
+    else if (current && this.noSpace) state = 'no-space'
+    else if (slot?.started && progress < 1 && (current || slot === this.prefetch)) state = 'downloading'
+    else if (progress > 0 && progress < 1) state = 'waiting'
+    return {
+      id: i.id,
+      name: i.name,
+      fileSize: i.fileSize,
+      durationS: i.durationMs === null ? null : i.durationMs / 1000,
+      current,
+      local: { state, progress, downBps: slot?.started ? (slot.lastStats?.downBps ?? 0) : 0 },
+    }
   }
 
   private emitTimeline(): void {
-    if (!this.timeline) return
-    const t = this.timeline.forViewer(this.states, BaseSession.bufferedOf(this.player))
+    const slot = this.current
+    if (!slot?.timeline) return
+    const t = slot.timeline.forViewer(slot.states, BaseSession.bufferedOf(this.player))
     this.deps.emit('timeline', t.event)
     this.player?.osc('ranges', t.osc)
   }
 
   protected override onPeersTick(): void {
-    const st = this.lastStats
-    if (!st) return
+    this.emitPlaylist()
+    this.shareUpload()
+    const slot = this.current
+    const st = slot?.lastStats
+    if (!slot || !st) return
     this.deps.emit('transfer', {
       downBps: st.downBps,
       upBps: st.upBps,
@@ -638,28 +968,30 @@ export class ViewerSession extends BaseSession {
       etaToEofS: st.etaToEofS,
       diskLow: st.diskLow,
     })
-    this.file?.update({ progress: st.progress })
+    this.updateEntry(slot)
+    this.file?.update({ progress: st.progress, playlist: [...this.entries.values()] })
   }
 
   protected override transferPeers(): readonly PeerTransferStats[] {
-    return this.lastStats?.peers ?? []
+    return this.current?.lastStats?.peers ?? []
   }
 
   protected override keepAwake(): boolean {
-    return !this.isStopped() && !this.transferError && (this.lastStats?.progress ?? 0) < 1
+    const slot = this.current
+    return !this.isStopped() && !!slot && !slot.transferError && slot.progress < 1
   }
 
   protected override applyUploadLimit(kbps: number | null): void {
-    this.transfer?.setUploadLimit(kbps)
+    for (const s of this.slots.values()) s.setUploadLimit(kbps)
   }
 
   protected override applyDownloadLimit(kbps: number | null): void {
-    this.transfer?.setDownloadLimit(kbps)
+    for (const s of this.slots.values()) s.setDownloadLimit(kbps)
   }
 
   /** mpv's demuxer waits in a read of the video (file 0) for a piece: the player reloads instead of seeking. */
   protected override readerBlocked(): boolean {
-    return this.server?.isBlocked(0) ?? false
+    return this.current?.readerBlocked() ?? false
   }
 
   protected override onRoomClosed(s: RoomState): void {
@@ -669,8 +1001,9 @@ export class ViewerSession extends BaseSession {
     this.confirmReject?.(new CodedError('cancelled', 'the room closed'))
     this.confirm = null
     this.confirmReject = null
+    if (this.retryTimer) clearTimeout(this.retryTimer)
     this.stopFollowing()
-    this.stopReporting()
+    for (const slot of this.slots.values()) slot.stopReporting()
     const reason =
       s.phase === 'ended'
         ? null
@@ -691,19 +1024,18 @@ export class ViewerSession extends BaseSession {
    * stops (play requests then say not-ready) and the player pauses where it is. The download stays.
    */
   private stopFollowing(): void {
-    const sync = this.sync
-    if (!sync) return
-    this.sync = null
-    const roomPos = sync.roomPosition()
-    sync.stop()
+    if (!this.sync) return
+    const roomPos = this.sync.roomPosition()
+    this.stopSync()
     const player = this.player
     void player?.setPaused(true).catch(() => undefined)
     // The member reported playback at 4 Hz and stopped with sync: its last report still says playing, and the
     // renderer would show Pause and run the cursor on. A player with nothing loaded stops where the room was.
     const pos = player?.prop('time-pos')
+    const map = this.current?.map
     this.deps.emit('playback', {
       posS: Math.max(0, typeof pos === 'number' ? pos : (roomPos ?? 0)),
-      durationS: this.map && this.map.durationMs > 0 ? this.map.durationMs / 1000 : null,
+      durationS: map && map.durationMs > 0 ? map.durationMs / 1000 : null,
       paused: true,
       seeking: false,
       stalled: false,
@@ -715,29 +1047,30 @@ export class ViewerSession extends BaseSession {
     this.giveSource()
   }
 
-  /** No more link reports to the host: a closed room has no route to it, and a leave tells it by leaving. */
-  private stopReporting(): void {
-    this.stopLinks?.()
-    this.stopLinks = null
-  }
-
-  /**
-   * fMP4 without sidx (needsFullDownload): FFmpeg reads such a file to its end at open, so mpv would sit in
-   * that read for the whole download, and every reload for a blocked reader would start it over. mpv gets the
-   * stream once the download is complete; until then the member has no source and stays 'joining'.
-   */
-  private holdingSource(): boolean {
-    return this.fullDownload && !this.downloaded
-  }
-
   /** The stream to the player through sync, which loads it at the room position (also after a player swap). */
   private giveSource(): void {
-    if (!this.server || !this.sync || this.holdingSource()) return
-    this.sync.setSource(this.server.url(0))
+    const slot = this.current
+    const url = slot?.sourceUrl()
+    if (!slot || !url || !this.sync || slot.holdingSource() || this.noSpace) return
+    this.sync.setSource(url)
+  }
+
+  // what the tests look into: the item playing
+  private get transfer(): ViewerSlot['transfer'] {
+    return this.current?.transfer ?? this.joinSlot?.transfer ?? null
+  }
+  private get server(): ViewerSlot['server'] {
+    return this.current?.server ?? null
+  }
+  private get manifest(): ViewerSlot['manifest'] {
+    return (this.current ?? this.joinSlot)?.manifest ?? null
+  }
+  private get states(): Uint8Array {
+    return this.current?.states ?? new Uint8Array(0)
   }
 
   get progress(): number {
-    return this.lastStats?.progress ?? 0
+    return this.current?.progress ?? 0
   }
 
   /** True once leave() has been called (the manager refuses a second, different leave meanwhile). */
@@ -747,7 +1080,7 @@ export class ViewerSession extends BaseSession {
 
   /** The transfer folder the download went into (resolved), once it started; a 'save' leave exports from it. */
   get transferDir(): string | null {
-    return this.transferFolder
+    return this.current?.transferFolder ?? null
   }
 
   /**
@@ -756,6 +1089,10 @@ export class ViewerSession extends BaseSession {
    * (null when there was none or the export failed), or rejects with CodedError 'incomplete' when segments
    * turned out missing: the session is stopped all the same, and the room stays resumable so a rejoin
    * downloads them again.
+   *
+   * With a playlist, the item playing gets the leave asked for. Other items still open are exported when complete
+   * and kept otherwise ('save'), or treated alike ('keep', 'delete'); 'delete' also removes the folders of items
+   * played earlier in the room.
    */
   leave(opts: { data: 'keep' | 'save' | 'delete'; saveDir?: string }): Promise<string | null> {
     this.leaving ??= this.doLeave(opts)
@@ -768,135 +1105,68 @@ export class ViewerSession extends BaseSession {
     this.confirmReject?.(new CodedError('cancelled', 'left the room'))
     this.confirm = null
     this.confirmReject = null
+    if (this.retryTimer) clearTimeout(this.retryTimer)
+    this.persistEntries()
     await this.room.leave().catch(() => undefined)
-    this.blobs?.destroy()
+    this.blobs.destroy()
     // player, sync and timers stop before the (possibly long) export, and a failed step never keeps the
     // rest from stopping
     await this.teardown().catch((e: unknown) => this.deps.log.error('stopping the session failed', e))
-    await this.server?.close().catch(() => undefined)
+    const saveDir = opts.saveDir ?? this.saveDir
+    const current = this.current ?? this.joinSlot
     let video: string | null = null
-    try {
-      const saveDir = opts.saveDir ?? this.saveDir
-      video = (await this.transfer?.leave({ data: opts.data, ...(saveDir ? { saveDir } : {}) }))?.video ?? null
-    } catch (e) {
-      this.deps.log.error('leaving the transfer failed', e)
-      // segments lost since the join (transfer's IncompleteDownloadError): nothing was consumed and their
-      // pieces left the journal, so the room record stays for a rejoin to download them again
-      if (e instanceof CodedError && e.code === 'incomplete') {
-        throw new CodedError(
-          'incomplete',
-          'Some downloaded data was missing. Rejoin the room to download it again, then save.',
-        )
+    let incomplete = false
+    const open = [...this.slots.values()]
+    for (const slot of current && open.includes(current) ? [current, ...open.filter((s) => s !== current)] : open) {
+      const mine = slot === current
+      const data = opts.data === 'save' && !mine && !slot.downloaded ? 'keep' : opts.data
+      try {
+        const saved = await slot.leave({ data, ...(saveDir ? { saveDir } : {}) })
+        if (mine) video = saved?.video ?? null
+      } catch (e) {
+        this.deps.log.error(`leaving the transfer of ${slot.name} failed`, e)
+        // segments lost since the join (transfer's IncompleteDownloadError): nothing was consumed and their
+        // pieces left the journal, so the room record stays for a rejoin to download them again
+        if (mine && e instanceof CodedError && e.code === 'incomplete') incomplete = true
       }
+    }
+    if (opts.data === 'delete') await this.deleteEarlierItems()
+    if (incomplete) {
+      throw new CodedError(
+        'incomplete',
+        'Some downloaded data was missing. Rejoin the room to download it again, then save.',
+      )
     }
     // nothing left to resume once the data is gone or exported
     if (opts.data === 'delete' || video) await this.deps.store.remove(this.roomId).catch(() => undefined)
     return video
   }
-}
 
-/**
- * The announce, torrent and manifest arrive separately: they must describe the same video before any of
- * them sizes a buffer, a journal or a folder. Sizes are bounded by the torrent's own piece hashes (the
- * torrent blob is at most 64 MiB), never by a number the host merely states.
- */
-export function crossCheck(
-  a: { infoHash: string; fileSize: number },
-  t: {
-    infoHash: string
-    pieceLength: number
-    length: number
-    pieces: readonly unknown[]
-    files: readonly { length: number }[]
-  },
-  m: Manifest,
-): void {
-  const bad = (what: string): never => {
-    throw new CodedError(
-      'bad-session',
-      `The host sent inconsistent video details (${what}). Ask the host to host it again.`,
-    )
-  }
-  if (t.infoHash !== a.infoHash) bad('torrent')
-  if (Buffer.from(m.infoHash).toString('hex') !== a.infoHash) bad('manifest')
-  const p = t.pieceLength
-  if (p !== m.pieceLength || p < 16 * 1024 || p > 4 * 1024 * 1024 || (p & (p - 1)) !== 0 || SEGMENT_BYTES % p !== 0) {
-    bad('piece length')
-  }
-  if (t.files.length < 1 || t.files.length > 1 + MAX_SUBS) bad('file count')
-  // one hash per piece of the whole length: MediaMap and the journal size themselves from these
-  if (
-    t.files.some((f) => !Number.isSafeInteger(f.length) || f.length < 0) ||
-    !Number.isSafeInteger(t.length) ||
-    t.pieces.length !== Math.ceil(t.length / p)
-  ) {
-    bad('pieces')
-  }
-  if (m.videoFileIndex !== 0 || t.files[0]?.length !== m.fileSize || m.fileSize !== a.fileSize) bad('file size')
-  if (
-    m.externalSubs.length > t.files.length - 1 ||
-    m.externalSubs.some((s) => s.fileIndex < 1 || s.fileIndex >= t.files.length)
-  ) {
-    bad('subtitles')
-  }
-  // any number of them: an fMP4 lists one sidx per fragment; startDownload merges them into piece spans
-  if ([...m.openCritical, ...m.seekCritical].some(([s, e]) => s < 0 || e < s || e > m.fileSize)) bad('ranges')
-  // counts the host merely states: each audio index is an urgent range on every replan, and seek points
-  // size MediaMap's arrays
-  if (m.tracks.length > MAX_TRACKS) bad('tracks')
-  const audio = m.audioIndexes ?? []
-  if (audio.length > MAX_AUDIO_INDEXES || audio.some((x) => x.points.length > maxKeyPoints(x.points, m.durationMs))) {
-    bad('audio')
-  }
-  if (m.keyframes.length > maxKeyPoints(m.keyframes, m.durationMs)) bad('keyframes')
-}
-
-/**
- * The host thins seek points to KEYFRAME_MIN_GAP_MS apart (thinKeyPoints), so an honest list holds about
- * one per gap over the duration, or over its own span when the container understates the duration.
- */
-function maxKeyPoints(points: readonly KeyPoint[], durationMs: number): number {
-  const span = (points.at(-1)?.[0] ?? 0) - (points[0]?.[0] ?? 0)
-  return Math.min(MAX_KEY_POINTS, Math.ceil(Math.max(durationMs, span) / KEYFRAME_MIN_GAP_MS) + 2)
-}
-
-/**
- * Critical byte ranges (torrent bytes) as whole-piece spans for the scheduler: overlapping or adjacent
- * pieces merged, then the narrowest gaps bridged until at most `max` spans remain. Every span is a
- * selection re-added on each replan, and a manifest may hold thousands of ranges in a few pieces (one
- * sidx per fragment). A bridged gap only makes a few more pieces critical.
- */
-export function criticalSpans(
-  ranges: readonly ByteRange[],
-  pieceLength: number,
-  length: number,
-  max = MAX_CRITICAL_SPANS,
-): ByteRange[] {
-  const P = pieceLength
-  const pieces = ranges
-    .filter(([s, e]) => e > s)
-    .map(([s, e]): [number, number] => [Math.floor(s / P), Math.floor((e - 1) / P)])
-    .sort((x, y) => x[0] - y[0])
-  let spans: [number, number][] = []
-  for (const [a, b] of pieces) {
-    const last = spans.at(-1)
-    if (last && a <= last[1] + 1) last[1] = Math.max(last[1], b)
-    else spans.push([a, b])
-  }
-  if (spans.length > max) {
-    // gap i lies between spans i and i + 1: bridge all but the widest max - 1
-    const gaps = spans.slice(1).map((s, i) => ({ i, width: s[0] - (spans[i]?.[1] ?? 0) }))
-    gaps.sort((x, y) => x.width - y.width)
-    const bridged = new Set(gaps.slice(0, spans.length - max).map((g) => g.i))
-    const merged: [number, number][] = []
-    for (const [i, s] of spans.entries()) {
-      const last = merged.at(-1)
-      if (last && bridged.has(i - 1)) last[1] = s[1]
-      else merged.push([s[0], s[1]])
+  /** Items played earlier in this room (or a resumed one) whose transfer was already closed: their folders. */
+  private async deleteEarlierItems(): Promise<void> {
+    const open = new Set([...this.slots.values()].map((s) => s.transferFolder).filter((d) => d !== null))
+    for (const e of this.entries.values()) {
+      const dir = e.transferDir
+      if (!dir || open.has(resolve(dir)) || !isPartialDir(dir)) continue
+      await rm(dir, { recursive: true, force: true }).catch((err: unknown) =>
+        this.deps.log.warn(`could not delete ${dir}: ${String(err)}`),
+      )
     }
-    spans = merged
   }
-  return spans.map(([a, b]): ByteRange => [a * P, Math.min((b + 1) * P, length)]).filter(([s, e]) => e > s)
+}
+
+/** A prepared playlist item as the announce that names the same torrent and manifest. */
+function announceOf(i: PlaylistItemBody): Announce | null {
+  if (!i.prepared || !i.infoHash || !i.torrent || !i.manifest || i.durationMs === null) return null
+  return {
+    v: 1,
+    infoHash: i.infoHash,
+    torrent: i.torrent,
+    manifest: i.manifest,
+    name: i.name,
+    fileSize: i.fileSize,
+    durationMs: i.durationMs,
+  }
 }
 
 function gb(bytes: number): string {

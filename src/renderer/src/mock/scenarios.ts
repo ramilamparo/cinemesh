@@ -82,6 +82,20 @@ export const SCENARIOS = {
     return { ...s, room: { ...s.room, pending: [...s.room.pending, { id: 'p-kai', name: 'Kai', via: 'Sam' }] } }
   },
   'room-viewer': () => fx.inRoom('viewer', now()),
+  // a series: the playlist panel, with episode 2 playing
+  'room-host-playlist': () => ({ ...fx.inRoom('host', now()), playlist: fx.playlist('host') }),
+  'room-viewer-playlist': () => ({ ...fx.inRoom('viewer', now()), playlist: fx.playlist('viewer') }),
+  // episode 2 ended: the countdown to episode 3 (the host can play it now or cancel)
+  'ended-host-playlist': () => ({
+    ...fx.inRoom('host', now()),
+    sync: fx.sync('host', { mode: 'ended' }),
+    playlist: fx.playlist('host', { advance: true }),
+  }),
+  'ended-viewer-playlist': () => ({
+    ...fx.inRoom('viewer', now()),
+    sync: fx.sync('viewer', { mode: 'ended' }),
+    playlist: fx.playlist('viewer', { advance: true }),
+  }),
   'room-viewer-waiting': () => {
     const s = fx.inRoom('viewer', now())
     return {

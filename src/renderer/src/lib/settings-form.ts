@@ -26,12 +26,15 @@ export interface SettingsForm {
   desyncWarn: boolean
   desyncWarnS: string
   oscPersistentStrip: boolean
+  playlistBackgroundDownload: boolean
+  playlistBackgroundUpload: boolean
   hostOthersControl: boolean
   hostWaitForAll: boolean
   hostStartMode: 'buffered' | 'play-through'
   hostStartSeconds: string
   hostAdmission: 'open' | 'approve'
   hostMaxMembers: string
+  hostAutoAdvance: boolean
 }
 
 export type FormErrors = { [K in keyof SettingsForm | 'form']?: string | undefined }
@@ -58,12 +61,15 @@ export function formFromSettings(s: Settings): SettingsForm {
     desyncWarn: s.desyncWarnMs > 0,
     desyncWarnS: s.desyncWarnMs > 0 ? String(s.desyncWarnMs / 1000) : '1',
     oscPersistentStrip: s.oscPersistentStrip,
+    playlistBackgroundDownload: s.playlistBackgroundDownload,
+    playlistBackgroundUpload: s.playlistBackgroundUpload,
     hostOthersControl: hd.othersControl,
     hostWaitForAll: hd.waitForAll,
     hostStartMode: hd.startMode.kind,
     hostStartSeconds: hd.startMode.kind === 'buffered' ? String(hd.startMode.seconds) : '10',
     hostAdmission: hd.admission,
     hostMaxMembers: String(hd.maxMembers),
+    hostAutoAdvance: hd.autoAdvance,
   }
 }
 
@@ -166,6 +172,8 @@ export function validateSettingsForm(
       ? take('desyncWarnS', seconds(form.desyncWarnS, 0.5, 30, 'Seconds'), current.desyncWarnMs || 1000)
       : 0,
     oscPersistentStrip: form.oscPersistentStrip,
+    playlistBackgroundDownload: form.playlistBackgroundDownload,
+    playlistBackgroundUpload: form.playlistBackgroundUpload,
     hostDefaults: {
       othersControl: form.hostOthersControl,
       waitForAll: form.hostWaitForAll,
@@ -177,6 +185,7 @@ export function validateSettingsForm(
         int(form.hostMaxMembers, 2, 12, 'Member cap'),
         current.hostDefaults.maxMembers,
       ),
+      autoAdvance: form.hostAutoAdvance,
     },
   }
   if (Object.keys(errors).length > 0) return { ok: false, errors }

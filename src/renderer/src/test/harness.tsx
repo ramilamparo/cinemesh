@@ -108,6 +108,8 @@ const IMPLICIT_ROLE: Record<string, string> = {
   textarea: 'textbox',
   select: 'combobox',
   dialog: 'dialog',
+  ol: 'list',
+  ul: 'list',
 }
 
 /** Elements with the role (explicit or implicit) whose accessible name contains `name`. */

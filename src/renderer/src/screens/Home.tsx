@@ -1,6 +1,7 @@
 import { useEffect, useState } from 'react'
 import type { NatClass, NatReport, RecentRoom } from '../../../shared/ipc/core'
 import { extractInvite } from '../../../shared/invite-link'
+import { MAX_PLAYLIST_ITEMS, naturalSort } from '../../../shared/media-files'
 import { THEME_MODES, type ThemeMode } from '../../../shared/theme-tokens'
 import { wt } from '../bridge'
 import { Modal, Segmented } from '../components/ui'
@@ -64,45 +65,81 @@ function baseName(path: string): string {
 }
 
 function HostCard(): React.JSX.Element {
-  const [video, setVideo] = useState<string | null>(null)
+  // in playlist order: the first one opens the room
+  const [videos, setVideos] = useState<string[]>([])
   const [subs, setSubs] = useState<string[]>([])
   const [busy, setBusy] = useState(false)
+  const first = videos[0] ?? null
 
-  const chooseVideo = async (): Promise<void> => {
-    const path = await wt().app.pickVideo()
-    if (path) setVideo(path)
+  const chooseVideos = async (opts: { add: boolean }): Promise<void> => {
+    const paths = await wt().app.pickVideos()
+    if (paths.length === 0) return
+    setVideos((cur) => naturalSort([...new Set([...(opts.add ? cur : []), ...paths])]).slice(0, MAX_PLAYLIST_ITEMS))
+    if (!opts.add) setSubs([])
   }
   const addSubs = async (): Promise<void> => {
     const paths = await wt().app.pickSubtitles()
     setSubs((cur) => [...cur, ...paths.filter((p) => !cur.includes(p))])
   }
+  const remove = (path: string): void => {
+    setVideos((cur) => cur.filter((x) => x !== path))
+    // the subtitles chosen were the first video's
+    if (path === first) setSubs([])
+  }
   const start = async (): Promise<void> => {
-    if (!video) return
+    if (!first) return
     setBusy(true)
-    await call('session.host', { videoPath: video, subtitlePaths: subs })
+    const more = videos.slice(1)
+    await call('session.host', { videoPath: first, subtitlePaths: subs, ...(more.length > 0 ? { more } : {}) })
     setBusy(false)
   }
 
   return (
     <section className="card stack" aria-labelledby="host-heading">
       <h2 id="host-heading">Host a video</h2>
-      {video === null ? (
+      {first === null ? (
         <>
-          <p className="muted">Pick a video file on this computer. Friends download it from you while you watch.</p>
+          <p className="muted">
+            Pick a video file on this computer, or several episodes for a playlist. Friends download them from you while
+            you watch.
+          </p>
           <div className="row">
-            <button type="button" className="primary" onClick={() => void chooseVideo()}>
+            <button type="button" className="primary" onClick={() => void chooseVideos({ add: false })}>
               Host a video…
             </button>
           </div>
         </>
       ) : (
         <>
-          <p className={styles.fileName} title={video}>
-            <span aria-hidden="true">🎞</span> {baseName(video)}
-          </p>
+          {videos.length === 1 ? (
+            <p className={styles.fileName} title={first}>
+              <span aria-hidden="true">🎞</span> {baseName(first)}
+            </p>
+          ) : (
+            <div className="stack">
+              <span className="muted">Playlist, in this order</span>
+              <ol className={styles.videoList} aria-label="Playlist">
+                {videos.map((v) => (
+                  <li key={v}>
+                    <span title={v}>{baseName(v)}</span>
+                    <button
+                      type="button"
+                      className="small"
+                      aria-label={`Remove ${baseName(v)}`}
+                      onClick={() => remove(v)}
+                    >
+                      Remove
+                    </button>
+                  </li>
+                ))}
+              </ol>
+            </div>
+          )}
           <div className="stack">
             <span className="muted">
-              Subtitle files {subs.length === 0 ? '(optional; they cannot be added after hosting starts)' : ''}
+              {videos.length > 1
+                ? `Subtitle files for ${baseName(first)} (optional). The other videos take the subtitle files next to them that share their name.`
+                : `Subtitle files ${subs.length === 0 ? '(optional; they cannot be added after hosting starts)' : ''}`}
             </span>
             {subs.length > 0 && (
               <ul className={styles.subList} aria-label="Subtitle files">
@@ -131,14 +168,17 @@ function HostCard(): React.JSX.Element {
             <button type="button" className="primary" disabled={busy} onClick={() => void start()}>
               Start hosting
             </button>
-            <button type="button" onClick={() => void chooseVideo()}>
+            <button type="button" onClick={() => void chooseVideos({ add: true })}>
+              Add videos…
+            </button>
+            <button type="button" onClick={() => void chooseVideos({ add: false })}>
               Choose another…
             </button>
             <button
               type="button"
               className="link"
               onClick={() => {
-                setVideo(null)
+                setVideos([])
                 setSubs([])
               }}
             >

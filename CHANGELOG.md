@@ -7,7 +7,18 @@ workflow (or `npm version`) turns that section into the release's own (scripts/c
 
 ## Unreleased
 
-Nothing yet.
+### Added
+
+- Playlists for watching a series: **Host a video…** takes several videos and puts them in episode order, and the
+  room's **Playlist** adds, orders, plays and removes videos. Each video takes the subtitle files next to it that
+  share its name.
+- The next video starts by itself a few seconds after one ends (**Play the next video by itself**), with **Play
+  now** and **Cancel**. The host's **>** and **<** in the player go to the next and previous video.
+- Each person keeps their audio track and subtitles on the next video when it has ones with the same name (or else
+  the same language), and subtitles stay off if they were off
+- Viewers download the next videos ahead, in playlist order, once the one playing is complete, and share them with
+  each other. The host shares them only with upload the video playing leaves. **Download upcoming playlist videos**
+  and **Share other playlist videos** in **Settings** turn this off.
 
 ## 0.1.1 - 2026-10-22
 

@@ -1,4 +1,5 @@
 import type { Torrent, Wire } from 'webtorrent'
+import type { SharedBucket } from './uplink.js'
 
 /** 0 = a piece some viewer's reader is blocked on, 1 = the group's hot window or a critical range, 2 = the rest */
 export type RequestClass = 0 | 1 | 2
@@ -16,6 +17,17 @@ export interface UploadSchedulerDeps {
   onArrival(wire: Wire, piece: number): boolean
   /** ms clock; tests inject one */
   now?: () => number
+  /**
+   * A playlist host's shared uplink (uplink.ts): its bucket replaces this scheduler's own rate (setRate then has no
+   * effect), and `mayRelease` false holds every release (an item fetched ahead, while the one playing waits).
+   */
+  bucket?: SharedBucket
+  mayRelease?: () => boolean
+  /**
+   * An item fetched ahead: a wire whose held requests got nothing for this long has them refused (BEP 6, fast
+   * wires only), before the viewer's 30 s request timeout would drop the wire. null = never.
+   */
+  maxHoldMs?: () => number | null
 }
 
 export interface UploadSchedulerStats {
@@ -208,12 +220,25 @@ export class UploadScheduler {
     }
   }
 
+  /** A wire holds a request it could release now (under its queue cap), rate permitting. */
+  waiting(): boolean {
+    return this.lanes.some((l) => l.wire.heldRequests.length > 0 && !l.wire.destroyed && this.queued(l) < this.cap(l))
+  }
+
   /** Every 50 ms once started: each wire's drain rate. */
   tick(): void {
     const now = this.now()
     const dt = (now - this.lastTick) / 1000
     this.lastTick = now
     if (dt <= 0) return
+    const maxHold = this.d.maxHoldMs?.() ?? null
+    for (const l of this.lanes) {
+      if (maxHold !== null && l.wire.hasFast && l.wire.heldRequests.length > 0 && now - l.servedAt > maxHold) {
+        // the item playing keeps the uplink busy: the viewer asks for these again (or elsewhere) at once
+        for (const r of [...l.wire.heldRequests]) if (l.wire.refuseRequest(r.piece, r.offset, r.length)) this.refused++
+        l.servedAt = now
+      }
+    }
     for (const l of this.lanes) {
       const u = this.d.transport(l.wire)
       let drained = l.passed - l.lastPassed
@@ -295,8 +320,10 @@ export class UploadScheduler {
 
   private releaseDue(): void {
     const now = this.now()
+    const shared = this.d.bucket
     const rate = this.rate
-    if (rate !== null) {
+    if (shared) shared.refill(now)
+    else if (rate !== null) {
       const depth = Math.max(BLOCK, (rate * BURST_MS) / 1000)
       this.tokens = Math.min(depth, this.tokens + (rate * (now - this.tokensAt)) / 1000)
     }
@@ -305,8 +332,10 @@ export class UploadScheduler {
       const u = this.d.transport(l.wire)
       if (u) l.unsent = Math.max(0, u.unsentBytes)
     }
+    const limited = shared ? shared.limited() : rate !== null
     for (;;) {
-      if (rate !== null && this.tokens <= 0) return
+      if (this.d.mayRelease && !this.d.mayRelease()) return
+      if (limited && (shared ? shared.tokens() : this.tokens) <= 0) return
       const n = this.lanes.length // a release can close a wire
       let best: { lane: Lane; k: number; rank: number; i: number } | null = null
       for (let i = 0; i < n; i++) {
@@ -321,7 +350,10 @@ export class UploadScheduler {
       if (!best) return
       const r = best.lane.wire.heldRequests[best.k] as { piece: number; offset: number; length: number }
       this.rr = (this.rr + best.i + 1) % n
-      if (rate !== null) this.tokens -= r.length
+      if (limited) {
+        if (shared) shared.take(r.length)
+        else this.tokens -= r.length
+      }
       this.release(best.lane, r.piece, r.offset, r.length, now)
     }
   }

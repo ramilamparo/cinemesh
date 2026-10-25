@@ -242,4 +242,20 @@ describe.skipIf(!HAVE_MPV || !HAVE_FFMPEG)('wt-osc.lua in mpv', () => {
     expect((await mpv.ipc.getProperty('pause')).value).toBe(true)
     expect(await oscErrors(logFile)).toEqual([])
   })
+
+  it("the host's > and < ask for a playlist's next and previous video; a viewer's do nothing", async () => {
+    intents.length = 0
+    await toOsc('perms', { isHost: false, canPlayPause: true, canSeek: true })
+    await mpv.ipc.command(['keypress', '>'])
+    await mpv.ipc.command(['keypress', '<'])
+    await sleep(300)
+    expect(intents).toHaveLength(0)
+    await toOsc('perms', { isHost: true, canPlayPause: true, canSeek: true })
+    await mpv.ipc.command(['keypress', '>'])
+    await until(() => intents.length === 1)
+    await mpv.ipc.command(['keypress', '<'])
+    await until(() => intents.length === 2)
+    expect(intents.map((i) => i.t)).toEqual(['next', 'prev'])
+    expect(await oscErrors(logFile)).toEqual([])
+  })
 })

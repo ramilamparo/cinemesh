@@ -17,6 +17,22 @@ const SnapshotSchema = z.object({
   ]),
 })
 
+/**
+ * One playlist item (ADR 0011 §8). Host: what to re-prepare. Viewer: its download, where one started (transferDir;
+ * the sweep and a leave go through every item's).
+ */
+const PlaylistEntrySchema = z.object({
+  id: z.string(),
+  name: z.string(),
+  fileSize: z.number(),
+  videoPath: z.string().optional(),
+  subtitlePaths: z.array(z.string()).optional(),
+  infoHash: z.string().nullable().optional(),
+  transferDir: z.string().optional(),
+  progress: z.number().optional(),
+})
+export type PlaylistEntry = z.infer<typeof PlaylistEntrySchema>
+
 export const SessionFileSchema = z.object({
   v: z.literal(1),
   role: z.enum(['host', 'viewer']),
@@ -33,6 +49,14 @@ export const SessionFileSchema = z.object({
   saveDir: z.string().optional(),
   transferDir: z.string().optional(),
   progress: z.number().optional(),
+  /**
+   * Added (ADR 0011): the playlist, in order, and the item playing (the single fields above mirror it; `group` is
+   * that item's). `playlistRev`: the last session.playlist rev published (host), so a resume publishes above it.
+   */
+  playlist: z.array(PlaylistEntrySchema).max(1000).optional(),
+  currentItemId: z.string().optional(),
+  playlistRev: z.number().optional(),
+  autoAdvance: z.boolean().optional(),
   updatedAt: z.number(),
 })
 export type SessionFileData = z.infer<typeof SessionFileSchema>

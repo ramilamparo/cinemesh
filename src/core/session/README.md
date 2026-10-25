@@ -11,8 +11,13 @@ is registered, so a request sent at once (a cold start from an invite link) find
 | ------------------------ | ---------------------------------------------------------------------------------------------------------------- |
 | `manager.ts`             | `SessionManager`: at most one session. Every renderer request is zod-validated here, then delegated              |
 | `base-session.ts`        | Shared by both roles: room events, player (through `PlayerHolder`), sync engine, peer views, OSC state, teardown |
-| `host-session.ts`        | Room + invite at once → index → hash → manifest/blobs → announce → seed → player/sync                            |
+| `host-session.ts`        | Room + invite at once → index → hash → manifest/blobs → announce → seed → player/sync; the playlist (below)      |
+| `host-slot.ts`           | One playlist item on the host: its prepare (index, hashes, manifest, blobs) and its seeding                      |
 | `viewer-session.ts`      | Join → announce → blobs → JoinConfirm → download/stream server → player/sync. Resume reuses the journal          |
+| `viewer-slot.ts`         | One playlist item on a viewer: torrent and manifest, its download, its stream server                             |
+| `playlist-wire.ts`       | `session.playlist`'s schema and size guard (ADR 0011 §3)                                                         |
+| `playlist-files.ts`      | Sibling subtitles of a video, and a subtitle file name's language and forced flag                                |
+| `announce.ts`            | `session.announce`'s schema; `media-checks.ts`: `crossCheck`, `criticalSpans`, `cachedManifest`                  |
 | `sync-ports.ts`          | Adapters to sync's ports: Clock (`performance.now`), Player, Bus (and host presence), Datagram, Media, Transfer  |
 | `striping.ts`            | Bus message `transfer.links`: viewers report their bt lanes and blocked pieces, the host feeds its transfer      |
 | `hash-fails.ts`          | Host: viewers' hash failures (reported with `transfer.links`) → one notice and peer-list warnings                |
@@ -125,6 +130,38 @@ While preparing, `session.preparing {stage, pct}` goes out at most once a second
    the OSC shows the same text as a toast on `oscReady` (it drops toasts until it is up), also after an mpv
    restart or a Reopen. `done` releases the stream (`transfer.done`: "…it plays now") and the member meets the
    room as a late joiner does; once the room is over nothing is released.
+
+### Playlists (ADR 0011)
+
+The room plays a playlist, one item at a time; a single hosted video is a playlist of one.
+
+- **Host** (`HostSession` + `HostSlot`). `session.host {more}` and `playlist.add` append items, each with the
+  subtitle files next to it that share its name (`siblingSubtitles`). The item opening the room is prepared as
+  above. The rest are prepared in the background, in order, one hash worker, and the same files twice are refused.
+- **A switch** (`activate`):
+  1. the new item seeds first (tier 0 of the shared `HostUplink`);
+  2. the old item's engine stops;
+  3. `session.playlist` goes out naming the new epoch, then `session.announce`;
+  4. a new `SyncEngine` loads the item with the carried tracks (`planCarry`) and, for Next / Play / auto-advance,
+     plays it once the host's own member holds its first state.
+
+  The old item stays seeding on tier 1 while viewers fetch it (Settings: Share other playlist videos), and any other
+  item starts there when a viewer's `transfer.links` names it. Both stop after 60 s without a report.
+
+- **Auto-advance.** `sync.mode` 'ended' starts a 5 s countdown (`advance` in the playlist, the ended card, an OSC
+  toast) to the next playable item. Cancel holds it until the room next ends; a seek or play off the end drops it.
+- **Viewer** (`ViewerSession` + `ViewerSlot`). It follows `session.playlist`'s current item (or, from an older host,
+  the announce).
+  - The first item goes through JoinConfirm; later ones download into the confirmed folder after a space check (no
+    space: the member reports disk-full).
+  - Each item gets a new engine that applies only its epoch (`acceptEpoch`) and takes over the clock estimate.
+  - With Download upcoming playlist videos on, once the item playing is complete the next incomplete items download
+    ahead, strictly in order. An item downloaded ahead plays without downloading again.
+  - Items played earlier stay open to share (the last two) or close; the upload limit is shared across them once a
+    second.
+- **Persistence.** `session.json`'s `playlist` lists every item, with its `transferDir` on viewers, and
+  `currentItemId`, `playlistRev` and `autoAdvance`. The single fields mirror the current item. The sweep, Delete
+  and a leave go through every item's folder.
 
 ### Resume
 

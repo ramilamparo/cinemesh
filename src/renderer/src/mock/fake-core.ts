@@ -40,6 +40,8 @@ export interface FakeOptions {
   recent?: RecentRoom[]
   /** rooms whose cut-off save finds data it needs gone: Finish saving gives 'rejoin' */
   exportLost?: string[]
+  /** what the videos dialog (pickVideos) answers; default the one fixture video */
+  pickedVideos?: string[]
 }
 
 export interface RecordedCall {
@@ -58,6 +60,8 @@ export class FakeCore {
   /** what session.recent answers; finishing or giving up a cut-off save changes it like core */
   recent: RecentRoom[]
   readonly exportLost: Set<string>
+  /** what the next pickVideos answers (tests may change it) */
+  pickedVideos: string[]
   readonly bridge: WtBridge
 
   private readonly handlers = new Map<CoreMethod, AnyHandler>()
@@ -76,6 +80,7 @@ export class FakeCore {
     this.pendingDeepLink = opts.pendingDeepLink ?? null
     this.recent = opts.recent ?? fx.recentRooms()
     this.exportLost = new Set(opts.exportLost)
+    this.pickedVideos = opts.pickedVideos ?? ['/home/alex/Videos/' + fx.FILE.name]
     this.timeScale = opts.timeScale ?? 1
     this.systemDark = opts.systemDark ?? false
     this.info = {
@@ -199,6 +204,7 @@ export class FakeCore {
       getTheme: () => Promise.resolve(this.theme()),
       onTheme: (cb) => this.listen('$theme', cb as (d: unknown) => void),
       pickVideo: () => (rec('pickVideo'), Promise.resolve('/home/alex/Videos/' + fx.FILE.name)),
+      pickVideos: () => (rec('pickVideos'), Promise.resolve([...this.pickedVideos])),
       pickSubtitles: () => (rec('pickSubtitles'), Promise.resolve(['/home/alex/Videos/friends.srt'])),
       pickFolder: (defaultPath) => (rec('pickFolder', defaultPath), Promise.resolve('/media/alex/External')),
       pickMpv: () => (rec('pickMpv'), Promise.resolve('/opt/mpv/bin/mpv')),
@@ -392,6 +398,7 @@ export class FakeCore {
       if (this.state.room) this.emit('room', { ...this.state.room, maxMembers: n })
       return null
     })
+    this.installPlaylist()
     this.handle('sync.setPerms', (perms) => this.patchSync({ perms }))
     this.handle('sync.setWaitForAll', ({ on }) => this.patchSync({ waitForAll: on }))
     this.handle('sync.setStartMode', (startMode) => this.patchSync({ startMode }))
@@ -525,6 +532,76 @@ export class FakeCore {
     await this.wait(ms)
     this.goIdle()
     if (saved !== null) this.emit('notice', fx.savedNotice(saved))
+  }
+
+  /** The playlist requests, on state.playlist as core would change it (prepared at once, no real switch). */
+  private installPlaylist(): void {
+    const list = (): NonNullable<fx.StateSlices['playlist']> => {
+      const p = this.state.playlist
+      if (!p) throw new CodedError('not-host', 'Only the host can do this')
+      return p
+    }
+    const put = (patch: Partial<NonNullable<fx.StateSlices['playlist']>>): null => {
+      const p = list()
+      this.emit('playlist', { ...p, ...patch, rev: p.rev + 1 })
+      return null
+    }
+    const play = (id: string): null => {
+      const p = list()
+      const item = p.items.find((i) => i.id === id)
+      if (!item) throw new CodedError('not-found', 'That item is no longer in the playlist')
+      if (item.host && item.host.state !== 'ready')
+        throw new CodedError('not-ready', `${item.name} is still being prepared`)
+      if (this.state.session) {
+        this.emit('session', {
+          ...this.state.session,
+          fileName: item.name,
+          fileSize: item.fileSize,
+          durationS: item.durationS,
+        })
+      }
+      if (this.state.sync) this.emit('sync', { ...this.state.sync, mode: 'playing' })
+      return put({ currentId: id, advance: null, items: p.items.map((i) => ({ ...i, current: i.id === id })) })
+    }
+    const step = (by: 1 | -1): null => {
+      const p = list()
+      const at = p.items.findIndex((i) => i.current)
+      const next = p.items[at + by]
+      if (!next) throw new CodedError('no-item', by > 0 ? 'This is the last video' : 'This is the first video')
+      return play(next.id)
+    }
+    this.handle('playlist.add', ({ videoPaths }) => {
+      const p = list()
+      const added = videoPaths.map((path, k) => ({
+        id: `b${String(p.items.length + k).padStart(11, '0')}`,
+        name: path.split(/[\\/]/).pop() ?? path,
+        fileSize: 2_000_000_000,
+        durationS: null,
+        current: false,
+        host: { state: 'queued' as const, pct: 0 },
+      }))
+      put({ items: [...p.items, ...added] })
+      return { added: added.length }
+    })
+    this.handle('playlist.remove', ({ id }) => {
+      const p = list()
+      if (p.items.find((i) => i.id === id)?.current) {
+        throw new CodedError('current', 'The video that is playing cannot be removed')
+      }
+      return put({ items: p.items.filter((i) => i.id !== id) })
+    })
+    this.handle('playlist.move', ({ id, toIndex }) => {
+      const items = [...list().items]
+      const from = items.findIndex((i) => i.id === id)
+      const [item] = items.splice(from, 1)
+      if (item) items.splice(Math.min(toIndex, items.length), 0, item)
+      return put({ items })
+    })
+    this.handle('playlist.play', ({ id }) => play(id))
+    this.handle('playlist.next', () => step(1))
+    this.handle('playlist.prev', () => step(-1))
+    this.handle('playlist.setAutoAdvance', ({ on }) => put({ autoAdvance: on, ...(on ? {} : { advance: null }) }))
+    this.handle('playlist.cancelAdvance', () => put({ advance: null }))
   }
 
   private goIdle(): void {

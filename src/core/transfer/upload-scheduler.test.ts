@@ -3,7 +3,8 @@ import { createRequire } from 'node:module'
 import BtWire from 'bittorrent-protocol'
 import type { Torrent, Wire } from 'webtorrent'
 import { describe, expect, it } from 'vitest'
-import { type RequestClass, UploadScheduler } from './upload-scheduler.js'
+import { HostUplink, type UplinkMember } from './uplink.js'
+import { type RequestClass, UploadScheduler, type UploadSchedulerDeps } from './upload-scheduler.js'
 
 // The upload scheduler against real bittorrent-protocol wires (with the hold mode of
 // patches/bittorrent-protocol+5.0.9.patch): requests come in through the parser's entry points (_onRequest,
@@ -37,10 +38,17 @@ interface Viewer {
   reads: (() => void)[]
 }
 
-function setup(opts: { classes?: Record<number, RequestClass>; refuse?: number[] } = {}) {
+function setup(
+  opts: {
+    classes?: Record<number, RequestClass>
+    refuse?: number[]
+    clock?: { t: number }
+    extra?: Pick<UploadSchedulerDeps, 'bucket' | 'mayRelease' | 'maxHoldMs'>
+  } = {},
+) {
   const peers = new Map<string, EventEmitter & { wire: Wire | null }>()
   const t = Object.assign(new EventEmitter(), { _peers: peers }) as unknown as Torrent
-  const clock = { t: 0 }
+  const clock = opts.clock ?? { t: 0 }
   const members = new Map<Wire, string>()
   const transports = new Map<Wire, { unsentBytes: number; ackedBytes: number }>()
   const classes = new Map<number, RequestClass>(Object.entries(opts.classes ?? {}).map(([k, c]) => [Number(k), c]))
@@ -54,6 +62,7 @@ function setup(opts: { classes?: Record<number, RequestClass>; refuse?: number[]
       return !(opts.refuse ?? []).includes(i)
     },
     now: () => clock.t,
+    ...opts.extra,
   })
   /** a viewer's wire: the store answers at once ('sync'), or when the test says ('manual'); 'drain' passes it on */
   const connect = (id: string, o: { fast?: boolean; store?: 'sync' | 'manual'; drain?: boolean } = {}): Viewer => {
@@ -344,3 +353,87 @@ interface UdxStreamLike {
   on(event: 'data', cb: (d: Uint8Array) => void): unknown
   destroy(): void
 }
+
+describe('UploadScheduler on a shared uplink (playlists, ADR 0011 §5)', () => {
+  /** The item playing (tier 0) and one fetched ahead (tier 1), on one uplink. */
+  function pair() {
+    const clock = { t: 0 }
+    const uplink = new HostUplink({ now: () => clock.t })
+    let fgS: UploadScheduler | null = null
+    let bgS: UploadScheduler | null = null
+    const fgM: UplinkMember = { scheduler: () => fgS, streams: () => [] }
+    const bgM: UplinkMember = { scheduler: () => bgS, streams: () => [] }
+    const fg = setup({ clock, extra: { bucket: uplink.bucket, mayRelease: () => uplink.mayRelease(fgM) } })
+    const bg = setup({
+      clock,
+      extra: { bucket: uplink.bucket, mayRelease: () => uplink.mayRelease(bgM), maxHoldMs: () => 10_000 },
+    })
+    fgS = fg.s
+    bgS = bg.s
+    const leaveFg = uplink.register(fgM, 0)
+    uplink.register(bgM, 1)
+    return { clock, uplink, fg, bg, fgM, bgM, leaveFg, done: () => uplink.destroy() }
+  }
+
+  it('the item fetched ahead waits while the playing one holds a request it could send', () => {
+    const { clock, uplink, fg, bg, done } = pair()
+    uplink.setLimit(16) // 16 KiB/s: one block a second
+    const a = fg.connect('a', { drain: true })
+    const b = bg.connect('b', { drain: true })
+    fg.request(a, 1)
+    bg.request(b, 7)
+    // no tokens yet: the playing item's request waits, so the other one may not take what comes first
+    expect([a.served, b.served]).toEqual([[], []])
+    clock.t = 1000
+    uplink.pumpAll()
+    expect([a.served, b.served]).toEqual([[1], []])
+    clock.t = 2000
+    uplink.pumpAll()
+    expect(b.served).toEqual([7])
+    done()
+  })
+
+  it('goes on while the playing item cannot send (its wires are at their queue cap)', () => {
+    const { fg, bg, done } = pair()
+    const a = fg.connect('a', { store: 'manual' })
+    const b = bg.connect('b', { drain: true })
+    for (let k = 0; k < 4; k++) fg.request(a, k)
+    expect(a.served).toEqual([0, 1]) // two reads fill a's 32 KiB
+    bg.request(b, 9)
+    expect(b.served).toEqual([9])
+    done()
+  })
+
+  it('refuses what an item fetched ahead held too long, before the viewer would drop the wire', () => {
+    const { clock, uplink, fg, bg, done } = pair()
+    uplink.setLimit(16)
+    const a = fg.connect('a', { drain: true })
+    const b = bg.connect('b', { drain: true })
+    fg.request(a, 1)
+    bg.request(b, 7)
+    bg.request(b, 8)
+    // the playing item keeps the uplink busy for 10 s
+    for (let s = 1; s <= 10; s++) {
+      clock.t = s * 1000
+      fg.request(a, 100 + s)
+      uplink.pumpAll()
+    }
+    clock.t = 10_050
+    bg.s.tick()
+    expect(b.rejects).toEqual([7, 8])
+    expect(b.wire.heldRequests).toHaveLength(0)
+    expect(bg.s.stats().refused).toBe(2)
+    done()
+  })
+
+  it("keeps counting what a member sent after it left, so the pacer's counter never goes back", () => {
+    const { fg, leaveFg, uplink, done } = pair()
+    const a = fg.connect('a', { drain: true })
+    fg.request(a, 1)
+    const sent = (uplink as unknown as { sentBytes(): number }).sentBytes()
+    expect(sent).toBeGreaterThan(0)
+    leaveFg()
+    expect((uplink as unknown as { sentBytes(): number }).sentBytes()).toBe(sent)
+    done()
+  })
+})

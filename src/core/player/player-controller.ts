@@ -16,6 +16,7 @@ import { type HdrStatus, hdrStatus, sameHdr } from './hdr-status.js'
 import { type IpcSpec, type MpvOs, type SessionType, buildMpvArgs } from './mpv-args.js'
 import { MpvIpc, type MpvEvent, type Timed } from './mpv-ipc.js'
 import { type MpvVersion, formatVersion } from './mpv-version.js'
+import { type CarryPlan, type Expect, sameLang } from './track-carry.js'
 import {
   OSC_SCRIPT,
   OscBridge,
@@ -162,11 +163,20 @@ export interface LoadOptions {
   title?: string | null
   /** external subtitles for this file (host: local paths, viewer: stream URLs); re-added after restarts */
   subtitles?: SubtitleSpec[]
+  /**
+   * For a file other than the loaded one: the audio and subtitle tracks to start it with (a playlist's next item,
+   * track-carry.ts). They ride in the loadfile like a reload's, and are checked against mpv's track list once the
+   * file opened. Ignored for the same file, which keeps its own choice.
+   */
+  carry?: CarryPlan | null
+  /** FakePlayer only: the file's duration (a real player reads it from the file) */
+  durationS?: number
 }
 
 export interface PlayerIntent {
   /** resync: the viewer's Shift+R or the bar's button; core decides (BaseSession), as for every other intent */
-  kind: 'play' | 'pause' | 'seek' | 'close' | 'show-app' | 'resync'
+  /** next / prev (added): the host's `>` and `<`, a playlist's next and previous item; core decides */
+  kind: 'play' | 'pause' | 'seek' | 'close' | 'show-app' | 'resync' | 'next' | 'prev'
   pos?: number
   src: 'osc'
   seq: number
@@ -269,7 +279,10 @@ export class PlayerController extends EventEmitter<PlayerControllerEvents> {
 
   private expected: Expected = { paused: true, speed: 1, path: null, pendingSeek: null }
   private loading: (Waiter & { path: string }) | null = null
-  private loadOpts: Required<Omit<LoadOptions, 'start' | 'paused'>> = { title: null, subtitles: [] }
+  private loadOpts: Required<Omit<LoadOptions, 'start' | 'paused' | 'carry' | 'durationS'>> = {
+    title: null,
+    subtitles: [],
+  }
   private readonly desired: Desired = { aid: null, sid: null, volume: null, muted: null }
   /**
    * expected.path's track-list as mpv last reported it non-empty. mpv empties track-list from a loadfile
@@ -278,6 +291,8 @@ export class PlayerController extends EventEmitter<PlayerControllerEvents> {
    */
   private fileTracks: unknown[] = []
   private restoreTracks = false
+  /** the carry-over the newest load() of another file asked for, until that file's tracks were checked */
+  private carryPlan: CarryPlan | null = null
   /** aid and sid the last loadfile carried in its per-file options (checked at file-loaded) */
   private carried: { aid: number | 'no' | null; sid: number | 'no' | null } = { aid: null, sid: null }
   /** loadfiles sent, and those mpv has not answered yet: a file-loaded restores tracks for the newest only */
@@ -401,14 +416,17 @@ export class PlayerController extends EventEmitter<PlayerControllerEvents> {
       title: opts.title ?? null,
       subtitles: opts.subtitles ?? (sameFile ? this.loadOpts.subtitles : []),
     }
+    const carry = sameFile ? null : (opts.carry ?? null)
     if (!sameFile) {
-      this.desired.aid = null
-      this.desired.sid = null
+      this.desired.aid = carry?.aid ?? null
+      this.desired.sid = carry?.sid ?? null
       this.fileTracks = []
+      this.carryPlan = carry
     }
     this.expected.path = url
     this.expected.paused = paused
-    this.restoreTracks = sameFile
+    // a carried choice is restored like a reload's (it also keeps mpv's own picks from counting as the user's)
+    this.restoreTracks = sameFile || carry !== null
     await this.loadInternal(url, start, paused)
   }
 
@@ -818,9 +836,20 @@ export class PlayerController extends EventEmitter<PlayerControllerEvents> {
     if (!ipc || gen !== this.gen || this.entry !== entry || !this.newestEntryShown()) return
     const seq = this.loadfileSeq
     const current = (): boolean => gen === this.gen && seq === this.loadfileSeq
-    for (const sub of this.loadOpts.subtitles) {
-      await this.subAdd(sub, false)
+    const carry = this.carryPlan
+    for (const [i, sub] of this.loadOpts.subtitles.entries()) {
+      const select = carry?.externalSub === i
+      await this.subAdd(sub, select)
       if (!current()) return
+      // the carried choice is that file's subtitle: remembered like a user's, so reloads and restarts keep it
+      if (select) {
+        const sid = await ipc.getProperty('sid').then(
+          (r) => trackId(r.value),
+          () => null,
+        )
+        if (!current()) return
+        if (typeof sid === 'number') this.desired.sid = sid
+      }
     }
     if (!this.restoreTracks) return
     const d = this.desired
@@ -830,14 +859,53 @@ export class PlayerController extends EventEmitter<PlayerControllerEvents> {
     if (!current()) return
     const setSid = await this.mustSet(ipc, 'sid', d.sid, this.carried.sid)
     if (!current()) return
+    if (carry) {
+      // the manifest's track order stood in for mpv's ids: a track that is not the one matched is fixed here
+      const fixed = await this.checkCarry(ipc, carry)
+      if (!current()) return
+      this.carryPlan = null
+      if (fixed.aid !== undefined) d.aid = fixed.aid
+      if (fixed.sid !== undefined) d.sid = fixed.sid
+    }
     this.restoreTracks = false
     const sets: Promise<void>[] = []
-    if (setAid && d.aid !== null) sets.push(ipc.setProperty('aid', d.aid))
-    if (setSid && d.sid !== null) sets.push(ipc.setProperty('sid', d.sid))
+    if ((setAid || this.carried.aid !== d.aid) && d.aid !== null) sets.push(ipc.setProperty('aid', d.aid))
+    if ((setSid || this.carried.sid !== d.sid) && d.sid !== null) sets.push(ipc.setProperty('sid', d.sid))
     if (d.volume !== null) sets.push(ipc.setProperty('volume', d.volume))
     if (d.muted !== null) sets.push(ipc.setProperty('mute', d.muted))
     const results = await Promise.allSettled(sets)
     for (const r of results) if (r.status === 'rejected') this.log.warn(`player: re-apply track: ${String(r.reason)}`)
+  }
+
+  /**
+   * The carried tracks mpv selected, against what was matched (title and language): the matching ran on the
+   * manifest, whose order stands in for mpv's per-type ids. A mismatch picks the matched track by its title and
+   * language in mpv's list; nothing there keeps what mpv took.
+   */
+  private async checkCarry(ipc: MpvIpc, carry: CarryPlan): Promise<{ aid?: number; sid?: number }> {
+    const list = await ipc.getProperty('track-list').then(
+      (r) => (Array.isArray(r.value) ? (r.value as unknown[]) : []),
+      () => [] as unknown[],
+    )
+    const out: { aid?: number; sid?: number } = {}
+    const check = (type: 'audio' | 'sub', id: number | 'no' | null, want: Expect | undefined): number | undefined => {
+      if (!want || typeof id !== 'number') return undefined
+      const tracks = tracksOf(list, type).filter((t) => !t.external)
+      const looks = (t: TrackInfo): boolean =>
+        (t.title?.trim() ?? null) === want.title && (want.lang === null || sameLang(t.lang, want.lang))
+      const got = tracks.find((t) => t.id === id)
+      if (!got || looks(got)) return undefined
+      const right = tracks.find(looks)
+      this.log.warn(
+        `player: carried ${type} ${String(id)} is not the matched track; ${right ? `using ${String(right.id)}` : 'keeping it'}`,
+      )
+      return right?.id
+    }
+    const aid = check('audio', this.desired.aid, carry.verify.audio)
+    if (aid !== undefined) out.aid = aid
+    const sid = check('sub', this.desired.sid, carry.verify.sub)
+    if (sid !== undefined) out.sid = sid
+    return out
   }
 
   /** A track to set at file-loaded: not carried in the loadfile (an external sid), or carried and not taken. */
@@ -1190,6 +1258,8 @@ export class PlayerController extends EventEmitter<PlayerControllerEvents> {
       case 'pause':
       case 'show-app':
       case 'resync':
+      case 'next':
+      case 'prev':
         this.emit('intent', { kind: i.t, src: 'osc', seq: i.seq })
         return
     }
@@ -1310,13 +1380,20 @@ export class PlayerController extends EventEmitter<PlayerControllerEvents> {
     let opts = `start=${String(Math.max(0, start))},pause=${paused ? 'yes' : 'no'}`
     const aid = this.restoreTracks ? this.desired.aid : null
     const want = this.restoreTracks ? this.desired.sid : null
-    const sid = want === 'no' || (typeof want === 'number' && this.isEmbeddedSub(want)) ? want : null
+    // a carried sid is embedded by construction: the new file's track list is not known before it opens
+    const embedded = (id: number): boolean => this.isEmbeddedSub(id) || this.carryPlan?.sid === id
+    const sid = want === 'no' || (typeof want === 'number' && embedded(want)) ? want : null
     this.carried = { aid, sid }
     if (aid !== null) {
       opts += `,aid=${String(aid)}`
       const lang =
-        typeof aid === 'number' ? tracksOf(this.fileTrackList(), 'audio').find((t) => t.id === aid)?.lang : null
+        typeof aid === 'number'
+          ? (tracksOf(this.fileTrackList(), 'audio').find((t) => t.id === aid)?.lang ?? this.carryPlan?.alang)
+          : null
       if (lang && LANG_RE.test(lang)) opts += `,alang=${lang}`
+    } else if (this.restoreTracks && this.carryPlan?.alang && LANG_RE.test(this.carryPlan.alang)) {
+      // no match by title: the carried language still beats the --alang default
+      opts += `,alang=${this.carryPlan.alang}`
     }
     if (sid !== null) opts += `,sid=${String(sid)}`
     return opts

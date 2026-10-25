@@ -270,6 +270,21 @@ viewers; at a saturated 20 / 50 Mbit/s uplink the ctrl RTT p50 46 / 42 ms (shipp
 sets its p95 (ctrl 127 / 157 ms, datagrams ~4× idle; ADR 0006 Follow-up 6), and a competing upload on the same uplink
 pushes it down to its floor (Follow-up 2).
 
+## Playlists: one uplink for every item (`uplink.ts`, ADR 0011 §6)
+
+A host seeding several playlist items runs one engine per item, all on one `HostUplink`:
+
+- **One pacer and one token bucket.** `startHost(prepared, {uplink, tier})` builds no pacer of its own. Its scheduler
+  takes the uplink's `bucket` and `mayRelease`.
+- **Tiers.** A tier-1 scheduler (an item viewers fetch ahead) releases nothing while a tier-0 scheduler (the item
+  playing) holds a request it could release now (`UploadScheduler.waiting()`). It refuses (BEP 6) requests a wire
+  held for 10 s (`BACKGROUND_MAX_HOLD_MS`).
+- **The pacer** reads every engine's streams, each connection once, and the sum of their sent bytes.
+- **The upload limit** is the uplink's (`setLimit`). `setTier()` moves an engine between tiers.
+
+Without an uplink nothing changes. Engines of different infoHashes share a member's connection: each pairs its own
+Protomux channel (`id: infoHash`).
+
 ## Viewer download limit (`download-gate.ts`)
 
 ADR 0010. KiB/s like the upload limit; viewers only (a host downloads nothing: its torrent has no gate). WebTorrent's

@@ -4,6 +4,7 @@ import type {
   NoticeEvent,
   PeerView,
   PlayerEvent,
+  PlaylistEvent,
   RecentRoom,
   Role,
   SessionEvent,
@@ -345,4 +346,53 @@ export function recentRooms(): RecentRoom[] {
       resumable: false,
     },
   ]
+}
+
+/** A series in a playlist (ADR 0011): episode 2 plays, 3 prepares (host) or downloads ahead (viewer), 4 waits. */
+export function playlist(role: Role, opts: { advance?: boolean } = {}): PlaylistEvent {
+  const ep = (n: number): string => `Nature.Documentary.S01E0${String(n)}.1080p.mkv`
+  const host = role === 'host'
+  const items: PlaylistEvent['items'] = [
+    {
+      id: 'aaaaaaaaaaa1',
+      name: ep(1),
+      fileSize: 2_100_000_000,
+      durationS: 2_640,
+      current: false,
+      ...(host ? { host: { state: 'ready', pct: 1 } } : { local: { state: 'complete', progress: 1, downBps: 0 } }),
+    },
+    {
+      id: 'aaaaaaaaaaa2',
+      name: ep(2),
+      fileSize: 2_300_000_000,
+      durationS: 2_710,
+      current: true,
+      ...(host
+        ? { host: { state: 'ready', pct: 1 } }
+        : { local: { state: 'downloading', progress: 0.34, downBps: 3_100_000 } }),
+    },
+    {
+      id: 'aaaaaaaaaaa3',
+      name: ep(3),
+      fileSize: 2_200_000_000,
+      durationS: host ? null : 2_590,
+      current: false,
+      ...(host ? { host: { state: 'hashing', pct: 0.41 } } : { local: { state: 'none', progress: 0, downBps: 0 } }),
+    },
+    {
+      id: 'aaaaaaaaaaa4',
+      name: ep(4),
+      fileSize: 2_250_000_000,
+      durationS: null,
+      current: false,
+      ...(host ? { host: { state: 'queued', pct: 0 } } : { local: { state: 'none', progress: 0, downBps: 0 } }),
+    },
+  ]
+  return {
+    rev: 7,
+    currentId: 'aaaaaaaaaaa2',
+    autoAdvance: true,
+    advance: opts.advance ? { nextId: 'aaaaaaaaaaa3', at: Date.now() + 5000 } : null,
+    items: opts.advance && host ? items.map((i) => (i.host ? { ...i, host: { state: 'ready', pct: 1 } } : i)) : items,
+  }
 }

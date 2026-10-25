@@ -241,14 +241,24 @@ describe('collectTransferLinks (host)', () => {
     const { host, viewer } = pair()
     host.memberIds = [HOST, viewer.self, CC]
     const t = new FakeTransfer()
+    const target = { transfer: t.asEngine(), ...(hashFails ? { hashFails } : {}) }
     const stop = collectTransferLinks({
       room: host.asRoom(),
-      transfer: t.asEngine(),
+      target: (infoHash) => (infoHash === undefined || infoHash === 'a'.repeat(40) ? target : null),
+      all: () => [target],
       log: quiet(),
-      ...(hashFails ? { hashFails } : {}),
     })
     return { host, viewer, t, stop }
   }
+
+  it('routes a report by its infoHash, and drops one about a torrent nothing seeds', () => {
+    const { viewer, t, stop } = host()
+    report(viewer, { v: 1, infoHash: 'b'.repeat(40), linked: [CC], urgent: [1] })
+    expect(t.links).toEqual([])
+    report(viewer, { v: 1, infoHash: 'a'.repeat(40), linked: [CC], urgent: [1] })
+    expect(t.links).toEqual([[viewer.self, [CC]]])
+    stop()
+  })
 
   const report = (from: FakeRoom, body: unknown): void => from.publish(TRANSFER_LINKS, body, { to: HOST })
 

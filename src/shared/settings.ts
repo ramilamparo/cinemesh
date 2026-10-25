@@ -15,6 +15,8 @@ const HostDefaultsSchema = z.object({
   startMode: StartModeSchema.default({ kind: 'buffered', seconds: 10 }),
   admission: z.enum(['open', 'approve']).default('open'),
   maxMembers: z.number().int().min(2).max(12).default(8),
+  // a playlist moves to its next item a few seconds after the current one ends (ADR 0011)
+  autoAdvance: z.boolean().default(true),
 })
 
 export const SettingsSchema = z.object({
@@ -48,6 +50,10 @@ export const SettingsSchema = z.object({
   oscPersistentStrip: z.boolean().default(false),
   // 0 = off; otherwise warn (with a Resync to live button) after this many ms behind the host for 2 s
   desyncWarnMs: z.union([z.literal(0), z.number().int().min(500).max(30_000)]).default(1000),
+  // Playlist items other than the one playing (ADR 0011 §6): download them in playlist order (watching only), and
+  // upload them to others (hosting and watching). Off: only the current item transfers.
+  playlistBackgroundDownload: z.boolean().default(true),
+  playlistBackgroundUpload: z.boolean().default(true),
   hostDefaults: HostDefaultsSchema.prefault({}),
 })
 

@@ -812,7 +812,10 @@ describe('viewer join path', () => {
     await viewer.client.until('session', (s) => s.phase === 'in-room')
     const reports = linkReports(viewer)
     await waitFor(() => reports().length >= 2, 'two reports (1 Hz)', 5000)
-    expect(reports().at(-1)?.[1]).toEqual({ v: 1, linked: [], urgent: [] })
+    // with the torrent it is about (a playlist runs one per item)
+    const { infoHash, ...rest } = (reports().at(-1)?.[1] ?? {}) as { infoHash?: string }
+    expect(infoHash).toMatch(/^[0-9a-f]{40}$/)
+    expect(rest).toEqual({ v: 1, linked: [], urgent: [] })
     expect(reports().at(-1)?.[2]).toEqual({ to: host.room.self })
     // a read waiting on piece 0 (the bare host serves none) goes out at once, not at the next tick
     const server = (internals(viewer).current as unknown as { server: { url(i: number): string } }).server

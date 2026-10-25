@@ -131,6 +131,18 @@ function SettingsBody({ settings, onClose }: { settings: Settings; onClose: () =
             />
           )}
         </Field>
+        <Switch
+          label="Download upcoming playlist videos"
+          description="While watching, fetch the next videos in the playlist in order, so each one starts at once. Off: only the video playing downloads."
+          checked={form.playlistBackgroundDownload}
+          onChange={(on) => set('playlistBackgroundDownload', on)}
+        />
+        <Switch
+          label="Share other playlist videos"
+          description="Hosting or watching, send the playlist's other videos to people fetching them ahead. The video playing always comes first. Off: you only share the video playing."
+          checked={form.playlistBackgroundUpload}
+          onChange={(on) => set('playlistBackgroundUpload', on)}
+        />
       </section>
 
       <section className={styles.section} aria-labelledby="set-player">
@@ -349,6 +361,12 @@ function SettingsBody({ settings, onClose }: { settings: Settings; onClose: () =
             { value: 'approve', label: 'Ask me first' },
           ]}
           onChange={(v) => set('hostAdmission', v)}
+        />
+        <Switch
+          label="Play the next video by itself"
+          description="A few seconds after a playlist video ends, the next one starts. You can cancel it each time."
+          checked={form.hostAutoAdvance}
+          onChange={(on) => set('hostAutoAdvance', on)}
         />
       </section>
 

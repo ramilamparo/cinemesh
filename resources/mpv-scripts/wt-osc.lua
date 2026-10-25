@@ -16,6 +16,7 @@
 --   resync {shown}   a viewer behind the host: the bar shows a Resync to live button
 -- OSC -> core (script-message-to <client> ...):
 --   wt-ready {v}   wt-intent {t, pos?, delta?, seq}   t = resync: Shift+R or that button (never on the host)
+--   t = next / prev: the host's > and <, a playlist's next and previous video (core says if there is none)
 
 local mp = require 'mp'
 local utils = require 'mp.utils'
@@ -601,6 +602,13 @@ bind('R', 'resync', function()
     poke()
     intent('resync')
   end
+end)
+-- a playlist's next and previous video: the host's (core answers with a toast when there is none)
+bind('>', 'next', function()
+  if S.perms.isHost then intent('next') end
+end)
+bind('<', 'prev', function()
+  if S.perms.isHost then intent('prev') end
 end)
 bind('CLOSE_WIN', 'close', function() intent('close') end)
 bind('MBTN_LEFT', 'mouse', on_mouse_button, { complex = true })

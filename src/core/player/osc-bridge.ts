@@ -99,7 +99,8 @@ export interface OscInit {
   persistentStrip: boolean
 }
 
-export type OscIntentKind = 'play' | 'pause' | 'toggle' | 'seek' | 'seek-rel' | 'close' | 'show-app' | 'resync'
+export type OscIntentKind =
+  'play' | 'pause' | 'toggle' | 'seek' | 'seek-rel' | 'close' | 'show-app' | 'resync' | 'next' | 'prev'
 export interface OscIntent {
   t: OscIntentKind
   pos?: number
@@ -413,6 +414,8 @@ const INTENT_KINDS = new Set<OscIntentKind>([
   'close',
   'show-app',
   'resync',
+  'next',
+  'prev',
 ])
 
 export function parseIntent(json: string | undefined): OscIntent | null {

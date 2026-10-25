@@ -62,6 +62,7 @@ export class FakePlayer extends EventEmitter<PlayerLikeEvents> implements Player
 
   load(url: string, opts: LoadOptions = {}): Promise<void> {
     this.path = url
+    if (opts.durationS) this.durationS = opts.durationS
     this.paused = opts.paused ?? true
     this.stalled = false
     this.jumpTo(opts.start ?? 0)
