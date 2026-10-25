@@ -7,6 +7,7 @@ import {
   byRole,
   callsOf,
   click,
+  dragTo,
   flush,
   mountApp,
   queryByRole,
@@ -124,6 +125,35 @@ describe('Home', () => {
     await click(byRole(m.container, 'button', 'Start hosting'))
     expect(callsOf(m.fake, 'session.host')).toEqual([
       { videoPath: '/v/Show.S01E1.mkv', subtitlePaths: [], more: ['/v/Show.S01E10.mkv'] },
+    ])
+  })
+
+  it('orders the playlist as the host likes; added videos go after it', async () => {
+    m = await mountApp('home', { pickedVideos: ['/v/Show.S01E2.mkv', '/v/Show.S01E1.mkv'] })
+    await click(byRole(m.container, 'button', 'Host a video…'))
+    await click(byRole(m.container, 'button', 'Add subtitles…'))
+    await click(byRole(m.container, 'button', 'Move Show.S01E2.mkv up'))
+    const list = (): HTMLElement => byRole(m?.container ?? document.body, 'list', 'Playlist')
+    expect(text(list())).toMatch(/E2\.mkv.*E1\.mkv/)
+    // the subtitle files chosen were for the video that opened the playlist
+    expect(text(m.container)).toContain('Subtitle files for Show.S01E2.mkv')
+    expect(text(m.container)).not.toContain('friends.srt')
+
+    m.fake.pickedVideos = ['/v/Show.S01E4.mkv', '/v/Show.S01E3.mkv', '/v/Show.S01E1.mkv']
+    await click(byRole(m.container, 'button', 'Add videos…'))
+    expect(text(list())).toMatch(/E2\.mkv.*E1\.mkv.*E3\.mkv.*E4\.mkv/)
+    // drag the last one to the top
+    const rows = (): HTMLElement[] => [...list().querySelectorAll('li')]
+    await dragTo(rows()[3] as HTMLElement, rows()[0] as HTMLElement)
+    expect(text(list())).toMatch(/E4\.mkv.*E2\.mkv.*E1\.mkv.*E3\.mkv/)
+    expect(byRole(m.container, 'button', 'Move Show.S01E4.mkv up').hasAttribute('disabled')).toBe(true)
+    await click(byRole(m.container, 'button', 'Start hosting'))
+    expect(callsOf(m.fake, 'session.host')).toEqual([
+      {
+        videoPath: '/v/Show.S01E4.mkv',
+        subtitlePaths: [],
+        more: ['/v/Show.S01E2.mkv', '/v/Show.S01E1.mkv', '/v/Show.S01E3.mkv'],
+      },
     ])
   })
 

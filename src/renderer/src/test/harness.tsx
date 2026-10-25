@@ -73,6 +73,26 @@ export async function click(el: Element): Promise<void> {
   await flush()
 }
 
+/** Drags `from` and drops it on `to`, one event at a time as a browser would. */
+export async function dragTo(from: Element, to: Element): Promise<void> {
+  const dataTransfer = new DataTransfer()
+  const fire = (el: Element, type: string): void => {
+    el.dispatchEvent(new DragEvent(type, { bubbles: true, cancelable: true, dataTransfer }))
+  }
+  for (const [el, type] of [
+    [from, 'dragstart'],
+    [to, 'dragover'],
+    [to, 'drop'],
+    [from, 'dragend'],
+  ] as const) {
+    await act(async () => {
+      fire(el, type)
+      await tick()
+    })
+  }
+  await flush()
+}
+
 export async function typeInto(el: Element, value: string): Promise<void> {
   const proto = el instanceof HTMLTextAreaElement ? HTMLTextAreaElement.prototype : HTMLInputElement.prototype
   // React tracks the value property; only the prototype's setter makes it see the change as user input.

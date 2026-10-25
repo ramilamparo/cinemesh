@@ -1,6 +1,6 @@
 import { afterEach, describe, expect, it } from 'vitest'
 import { act } from 'react'
-import { type Mounted, byRole, callsOf, click, mountApp, queryByRole, text } from '../../test/harness'
+import { type Mounted, byRole, callsOf, click, dragTo, mountApp, queryByRole, text } from '../../test/harness'
 import * as fx from '../../mock/fixtures'
 
 describe('PlaylistPanel', () => {
@@ -54,6 +54,22 @@ describe('PlaylistPanel', () => {
     ])
     await click(byRole(panel(), 'switch', 'Play the next video by itself'))
     expect(callsOf(m.fake, 'playlist.setAutoAdvance')).toEqual([{ on: false }])
+  })
+
+  it('the host drags an item to a new place; a viewer cannot', async () => {
+    m = await mountApp('room-host-playlist')
+    const rows = (): HTMLElement[] => [
+      ...byRole(m?.container ?? document.body, 'region', 'Playlist').querySelectorAll('li'),
+    ]
+    await dragTo(rows()[3] as HTMLElement, rows()[0] as HTMLElement)
+    expect(callsOf(m.fake, 'playlist.move')).toEqual([{ id: 'aaaaaaaaaaa4', toIndex: 0 }])
+    // dropped where it started: nothing moves
+    await dragTo(rows()[1] as HTMLElement, rows()[1] as HTMLElement)
+    expect(callsOf(m.fake, 'playlist.move')).toHaveLength(1)
+    await m.cleanup()
+
+    m = await mountApp('room-viewer-playlist')
+    expect(rows()[0]?.getAttribute('draggable')).toBe('false')
   })
 
   it('shows a viewer its own copy of each item, and no host controls', async () => {

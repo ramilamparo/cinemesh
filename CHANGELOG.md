@@ -7,8 +7,16 @@ workflow (or `npm version`) turns that section into the release's own (scripts/c
 
 ## Unreleased
 
+### Added
+
+- Drag a video in the room's **Playlist**, or in the list on Home before hosting, to change the order. On Home each
+  video also has ↑ and ↓. Subtitle files picked on Home stay with the first video: they are cleared when another
+  video moves to the top.
+
 ### Changed
 
+- Playlist file names wrap so they show whole, instead of being cut off.
+- On Home, **Add videos…** puts the new videos after the list, in episode order, and keeps the order you set.
 - Relay: the setup guide runs the relay with Docker (`docker compose up -d --build`) or as a systemd user service,
   which needs no sudo and works with a Node from nvm. The included `cinemesh-relay.service` is now a user unit. If
   you run the old system unit, keep your key by copying `/var/lib/cinemesh-relay/seed` to the new seed file

@@ -4,8 +4,9 @@ import { extractInvite } from '../../../shared/invite-link'
 import { MAX_PLAYLIST_ITEMS, naturalSort } from '../../../shared/media-files'
 import { THEME_MODES, type ThemeMode } from '../../../shared/theme-tokens'
 import { wt } from '../bridge'
-import { Modal, Segmented } from '../components/ui'
+import { FileName, Modal, Segmented } from '../components/ui'
 import { formatBytes, formatPercent } from '../lib/format'
+import { moveItem, useDragReorder } from '../lib/reorder'
 import { call } from '../rpc'
 import { finishExport, refreshRecent } from '../saves'
 import { useApp } from '../store'
@@ -74,7 +75,11 @@ function HostCard(): React.JSX.Element {
   const chooseVideos = async (opts: { add: boolean }): Promise<void> => {
     const paths = await wt().app.pickVideos()
     if (paths.length === 0) return
-    setVideos((cur) => naturalSort([...new Set([...(opts.add ? cur : []), ...paths])]).slice(0, MAX_PLAYLIST_ITEMS))
+    // picked videos go in episode order, after the ones already listed (in the order the host gave them)
+    setVideos((cur) => {
+      const kept = opts.add ? cur : []
+      return [...kept, ...naturalSort(paths.filter((p) => !kept.includes(p)))].slice(0, MAX_PLAYLIST_ITEMS)
+    })
     if (!opts.add) setSubs([])
   }
   const addSubs = async (): Promise<void> => {
@@ -86,6 +91,12 @@ function HostCard(): React.JSX.Element {
     // the subtitles chosen were the first video's
     if (path === first) setSubs([])
   }
+  const move = (from: number, to: number): void => {
+    const next = moveItem(videos, from, to)
+    setVideos(next)
+    if (next[0] !== first) setSubs([])
+  }
+  const drag = useDragReorder(move)
   const start = async (): Promise<void> => {
     if (!first) return
     setBusy(true)
@@ -117,19 +128,41 @@ function HostCard(): React.JSX.Element {
             </p>
           ) : (
             <div className="stack">
-              <span className="muted">Playlist, in this order</span>
+              <span className="muted">Playlist, in this order (drag a video, or use ↑ and ↓, to change it)</span>
               <ol className={styles.videoList} aria-label="Playlist">
-                {videos.map((v) => (
-                  <li key={v}>
-                    <span title={v}>{baseName(v)}</span>
-                    <button
-                      type="button"
-                      className="small"
-                      aria-label={`Remove ${baseName(v)}`}
-                      onClick={() => remove(v)}
-                    >
-                      Remove
-                    </button>
+                {videos.map((v, i) => (
+                  <li key={v} {...drag(i)}>
+                    <span title={v}>
+                      <FileName name={baseName(v)} />
+                    </span>
+                    <span className={styles.videoActions}>
+                      <button
+                        type="button"
+                        className="small"
+                        disabled={i === 0}
+                        aria-label={`Move ${baseName(v)} up`}
+                        onClick={() => move(i, i - 1)}
+                      >
+                        <span aria-hidden="true">↑</span>
+                      </button>
+                      <button
+                        type="button"
+                        className="small"
+                        disabled={i === videos.length - 1}
+                        aria-label={`Move ${baseName(v)} down`}
+                        onClick={() => move(i, i + 1)}
+                      >
+                        <span aria-hidden="true">↓</span>
+                      </button>
+                      <button
+                        type="button"
+                        className="small"
+                        aria-label={`Remove ${baseName(v)}`}
+                        onClick={() => remove(v)}
+                      >
+                        Remove
+                      </button>
+                    </span>
                   </li>
                 ))}
               </ol>

@@ -209,3 +209,16 @@ kbd {
 .stack > p {
   margin: 0;
 }
+
+/* A row being dragged to a new place (lib/reorder.ts), and the line where it would land. */
+[data-dragging='true'] {
+  opacity: 0.5;
+}
+
+[data-drop='before'] {
+  box-shadow: inset 0 2px 0 var(--accent);
+}
+
+[data-drop='after'] {
+  box-shadow: inset 0 -2px 0 var(--accent);
+}

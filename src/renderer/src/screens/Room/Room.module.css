@@ -325,15 +325,18 @@
   border-radius: 6px;
 }
 
+.playlistItem[draggable='true'] {
+  cursor: grab;
+}
+
 .playlistItem[aria-current='true'] {
   background: color-mix(in srgb, var(--accent) 12%, transparent);
 }
 
 .playlistName {
   grid-area: name;
-  overflow: hidden;
-  text-overflow: ellipsis;
-  white-space: nowrap;
+  /* the whole file name, wrapped: episode names differ at the end */
+  overflow-wrap: anywhere;
   font-weight: 500;
 }
 

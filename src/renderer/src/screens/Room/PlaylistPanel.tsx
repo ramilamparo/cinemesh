@@ -1,8 +1,9 @@
 import type { PlaylistItemView } from '../../../../shared/ipc/core'
 import { MAX_PLAYLIST_ITEMS, naturalSort } from '../../../../shared/media-files'
 import { wt } from '../../bridge'
-import { Switch } from '../../components/ui'
+import { FileName, Switch } from '../../components/ui'
 import { formatPercent, formatTime } from '../../lib/format'
+import { type DragRowProps, useDragReorder } from '../../lib/reorder'
 import { call } from '../../rpc'
 import { useApp } from '../../store'
 import styles from './Room.module.css'
@@ -10,13 +11,18 @@ import styles from './Room.module.css'
 /**
  * The room's playlist (ADR 0011): every item in order with the one playing marked. The host adds, orders, plays and
  * removes items and sets whether the room moves on by itself; viewers see the list with their own copy of each item.
+ * The host orders items by dragging a row or with its ↑/↓ buttons.
  * A room without a playlist (an older host) shows none.
  */
 export function PlaylistPanel(): React.JSX.Element | null {
   const playlist = useApp((s) => s.core.playlist)
   const isHost = useApp((s) => s.core.session?.role === 'host')
+  const items = playlist?.items ?? []
+  const drag = useDragReorder((from, to) => {
+    const item = items[from]
+    if (item) void call('playlist.move', { id: item.id, toIndex: to })
+  }, isHost)
   if (!playlist) return null
-  const { items } = playlist
   const at = items.findIndex((i) => i.current)
   const playable = (i: PlaylistItemView): boolean => (isHost ? i.host?.state === 'ready' : true)
   const prev = at > 0 ? items.slice(0, at).findLast(playable) : undefined
@@ -34,7 +40,14 @@ export function PlaylistPanel(): React.JSX.Element | null {
       </h2>
       <ol className={styles.playlist} aria-label="Playlist items">
         {items.map((item, index) => (
-          <PlaylistRow key={item.id} item={item} index={index} count={items.length} isHost={isHost} />
+          <PlaylistRow
+            key={item.id}
+            item={item}
+            index={index}
+            count={items.length}
+            isHost={isHost}
+            drag={drag(index)}
+          />
         ))}
       </ol>
       {isHost && (
@@ -72,13 +85,14 @@ function PlaylistRow(props: {
   index: number
   count: number
   isHost: boolean
+  drag: DragRowProps
 }): React.JSX.Element {
-  const { item, index, count, isHost } = props
+  const { item, index, count, isHost, drag } = props
   const ready = item.host?.state === 'ready'
   return (
-    <li className={styles.playlistItem} aria-current={item.current ? 'true' : undefined}>
-      <span className={styles.playlistName} title={item.name}>
-        {item.name}
+    <li className={styles.playlistItem} aria-current={item.current ? 'true' : undefined} {...drag}>
+      <span className={styles.playlistName}>
+        <FileName name={item.name} />
       </span>
       <span className={styles.playlistMeta}>
         {item.current && (

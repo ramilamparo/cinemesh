@@ -189,3 +189,21 @@ export function ProgressBar(props: { value: number; label: string }): React.JSX.
     </div>
   )
 }
+
+/**
+ * A file name that wraps between its parts (after `.`, `_`, `-` and spaces) rather than mid-word, so the whole name
+ * shows in a narrow column. Its container's `overflow-wrap: anywhere` breaks a part too long for a line.
+ */
+export function FileName({ name }: { name: string }): React.JSX.Element {
+  const parts = name.split(/(?<=[._\-\s])/)
+  return (
+    <>
+      {parts.map((p, i) => (
+        <span key={i}>
+          {p}
+          {i < parts.length - 1 && <wbr />}
+        </span>
+      ))}
+    </>
+  )
+}

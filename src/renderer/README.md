@@ -18,9 +18,11 @@ src/renderer/src/
   route.ts            selectScreen(core, leavingFrom): the screen for session.phase / player.status
   hooks.ts            useDeepLinks(), openInvite(), usePlaybackKeys()
   App.tsx             shell: TitleBar, current screen, Toasts, Settings / Leave / JoinDialog overlays
-  lib/                pure helpers: format, playhead, coverage, relay-key, keyboard, settings-form, theme, mpv-check
+  lib/                pure helpers: format, playhead, coverage, relay-key, keyboard, settings-form, theme, mpv-check,
+                      reorder (drag-and-drop list order)
   components/         TitleBar, Toasts, JoinDialog, LeavePrompt (+ StopHostingPrompt), KeepAwakeNote, Feasibility,
-                      FullDownload, MediaNotes, LimitField, ui (Switch, Field, Segmented, Modal, ProgressBar),
+                      FullDownload, MediaNotes, LimitField, ui (Switch, Field, Segmented, Modal, ProgressBar,
+                      FileName),
                       Timeline/{Timeline.tsx, draw.ts}
   screens/            Home, HostPrepare, JoinConfirm, Room/*, Settings (overlay), MpvSetup, ErrorScreen
   mock/               FakeCore (scriptable window.wt), fixtures, scenarios, simulate (live mode)
@@ -292,9 +294,11 @@ Query parameters:
   `leaving` (core reports phase `leaving`, without saying what runs), `leaving-save` (… a `save`, as after a reload
   mid-save), `preparing-full-download`, `room-host-full-download`, `room-viewer-full-download` (an fMP4 without
   sidx), `preparing-linear`, `room-host-linear`, `room-viewer-linear` (an MKV without Cues),
-  `room-host-poor-interleave`, `room-host-pending-via` (a join request a member passed on), `export-finished` (Home,
-  then core's startup notices about an interrupted export, `SCENARIO_NOTICES`), `recent-export` (Home with a cut-off
-  save in Recent rooms: Finish saving gives `finished`, Cancel saving `rejoin`), `recent-export-waiting` (… whose
+  `room-host-poor-interleave`, `room-host-pending-via` (a join request a member passed on), `room-host-playlist`,
+  `room-viewer-playlist`, `ended-host-playlist`, `ended-viewer-playlist` (a playlist, and its countdown to the next
+  video), `export-finished` (Home, then core's startup notices about an interrupted export, `SCENARIO_NOTICES`),
+  `recent-export` (Home with a cut-off save in Recent rooms: Finish saving gives `finished`, Cancel saving
+  `rejoin`), `recent-export-waiting` (… whose
   folder is not connected: Finish saving gives `waiting`; core's `transfer.export-waiting` notice at startup too),
   `recent-export-lost` (… whose data is gone: Finish saving gives `rejoin`), `mpv-missing`, `mpv-too-old`, `error`.
   What a scenario's core holds besides its state (its Recent rooms, `FakeOptions.recent` / `exportLost`) is in

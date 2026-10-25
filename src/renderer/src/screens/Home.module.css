@@ -52,11 +52,25 @@
   overflow-y: auto;
 }
 
-.videoList li > span {
-  overflow: hidden;
-  text-overflow: ellipsis;
-  white-space: nowrap;
+.videoList li {
+  padding: 2px 4px;
+  border-radius: 6px;
+}
+
+.videoList li[draggable='true'] {
+  cursor: grab;
+}
+
+/* the whole file name, wrapped: episode names differ at the end */
+.videoList li > span:first-child {
+  overflow-wrap: anywhere;
   min-width: 0;
+}
+
+.videoActions {
+  display: flex;
+  gap: 4px;
+  flex-shrink: 0;
 }
 
 .videoList li,
