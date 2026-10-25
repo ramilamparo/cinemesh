@@ -25,39 +25,58 @@ At startup it prints one JSON line with its `key` (64 hex characters). Paste tha
 
 **Logs:** every line is a JSON object `{t, level, msg, ...}`. The `stats` line holds the number of open DHT connections, plus blind-relay's session, pairing and stream counters (`pairings.active` is the number of relayed links right now).
 
-## Deploy on a VPS (systemd)
+## Deploy on a VPS
 
 Any small Linux VPS with a public IPv4 address works. The relay uses little CPU and memory, and is capped at 256 MB. What it costs is bandwidth: see below.
 
-1. Install Node.js 20 or newer.
-2. Install the relay so that `/usr/local/bin/cinemesh-relay` exists:
+Whichever way you run it, open its UDP port in the VPS firewall and in the provider's security group:
+
+```sh
+sudo ufw allow 49737/udp       # or: sudo firewall-cmd --add-port=49737/udp --permanent && sudo firewall-cmd --reload
+```
+
+Then check the result. The "relay listening" line should show `"firewalled":false`; with `true` it is followed by a "looks firewalled" warning, and members cannot reach it. In a room that uses the key, the relay status should read "ok". Rooms probe the relay every 5 minutes, and after a 10 s timeout show "relay unreachable".
+
+### Docker
+
+```sh
+git clone https://github.com/ramilamparo/cinemesh.git
+cd cinemesh/packages/relay
+docker compose up -d --build
+until docker compose logs relay | grep "relay listening"; do sleep 1; done    # waits for startup (~5 s), then shows the key
+```
+
+The container uses the host's network, so the relay is reached on the VPS's own port 49737 and sees its real address. The seed lives in the `relay-data` volume. It restarts unless you stop it, and is limited to 256 MB. To upgrade: `git pull`, then `docker compose up -d --build`. The key stays the same.
+
+### systemd user service
+
+1. Install Node.js 20 or newer (nvm works).
+2. Install the relay into your home:
 
    ```sh
    git clone https://github.com/ramilamparo/cinemesh.git
    cd cinemesh/packages/relay
-   sudo npm install -g .          # installs blind-relay + hyperdht and links /usr/local/bin/cinemesh-relay
+   npm pack --pack-destination /tmp                                               # /tmp/cinemesh-relay-<version>.tgz
+   npm install -g --prefix ~/.local/opt/cinemesh-relay /tmp/cinemesh-relay-*.tgz  # a copy, with blind-relay + hyperdht
+   rm /tmp/cinemesh-relay-*.tgz
    ```
 
-3. Open the UDP port in the VPS firewall and in the provider's security group:
+   Install the packed tarball, not the folder. `npm install -g .` only links the global package to the checkout and installs none of its dependencies, so the relay fails with `ERR_MODULE_NOT_FOUND`.
+
+3. Install and start the unit:
 
    ```sh
-   sudo ufw allow 49737/udp       # or: sudo firewall-cmd --add-port=49737/udp --permanent && sudo firewall-cmd --reload
+   mkdir -p ~/.config/systemd/user
+   sed "s|/usr/bin/node|$(command -v node)|" cinemesh-relay.service > ~/.config/systemd/user/cinemesh-relay.service
+   systemctl --user daemon-reload
+   systemctl --user enable --now cinemesh-relay
+   loginctl enable-linger "$USER"                           # start at boot, keep running after you log out
+   until journalctl --user -u cinemesh-relay -o cat | grep "relay listening"; do sleep 1; done    # waits for startup (~5 s), then shows the key
    ```
 
-4. Install and start the unit:
+   The unit runs as you. It keeps the seed in `~/.local/state/cinemesh-relay/seed` (`StateDirectory`; the "created a new seed" line shows the file), restarts on failure (`Restart=always`), and is limited to `MemoryMax=256M`. Without lingering, it stops when you log out. On some servers `loginctl enable-linger` asks for sudo once.
 
-   ```sh
-   sudo cp cinemesh-relay.service /etc/systemd/system/
-   sudo systemctl daemon-reload
-   sudo systemctl enable --now cinemesh-relay
-   journalctl -u cinemesh-relay -o cat | head -3    # the "relay listening" line has the key
-   ```
-
-   The unit runs as a `DynamicUser`. It keeps the seed in `/var/lib/cinemesh-relay/seed` (`StateDirectory`), restarts on failure (`Restart=always`), and is limited to `MemoryMax=256M`. It also has the usual sandboxing (`ProtectSystem=strict`, `ProtectHome`, `PrivateTmp`, and only AF_INET and AF_INET6 sockets).
-
-5. Check the result. The startup log should not warn "looks firewalled". In a room that uses the key, the relay status should read "ok". Rooms probe the relay every 5 minutes, and after a 10 s timeout show "relay unreachable".
-
-To upgrade, pull, run `sudo npm install -g .` again, then `sudo systemctl restart cinemesh-relay`. The key stays the same.
+To upgrade, pull, run the three install commands of step 2 again, then `systemctl --user restart cinemesh-relay`. The key stays the same. After upgrading Node with nvm, its path changes: run the `sed` line of step 3 again, then `systemctl --user daemon-reload`.
 
 ## Bandwidth math
 
@@ -72,5 +91,8 @@ Many providers bill or cap only egress, so count about _B × T_ per relayed view
 
 ## Security notes
 
-- The key is not a secret: it travels in invites. Anyone who has it can relay traffic through your server. Watch the `stats` lines, and rotate the seed (delete it and restart) if the relay is abused. After a rotation, hosts must paste the new key.
+- The key is not a secret: it travels in invites. Anyone who has it can relay traffic through your server, from Cinemesh or any other HyperDHT app, and the relay has no login or limits. Watch the `stats` lines (`pairings.active` while nobody you know is watching means someone else is using it), and rotate the seed (delete it and restart) if the relay is abused. After a rotation, hosts must paste the new key.
+- Set a billing alert or a data cap with the provider. Bandwidth is what abuse costs you.
 - The relay cannot decrypt anything. Room access is still controlled by the room secret and the host's admission.
+- The seed is the relay's only secret. Someone who has it can run a relay under your key, which can drop traffic but still decrypts nothing.
+- The relay needs no TLS, domain or reverse proxy: members reach it by key, and the link to it is encrypted.

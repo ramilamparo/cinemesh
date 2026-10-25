@@ -1,0 +1,14 @@
+# docker compose up -d --build: see README.md (Docker).
+services:
+  relay:
+    build: .
+    # The host's network: members reach the VPS's own UDP port, and the relay sees its real address.
+    network_mode: host
+    command: ['--port', '49737']
+    volumes:
+      - relay-data:/data
+    restart: unless-stopped
+    mem_limit: 256m
+
+volumes:
+  relay-data:

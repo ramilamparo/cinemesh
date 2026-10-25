@@ -7,7 +7,17 @@ workflow (or `npm version`) turns that section into the release's own (scripts/c
 
 ## Unreleased
 
-Nothing yet.
+### Changed
+
+- Relay: the setup guide runs the relay with Docker (`docker compose up -d --build`) or as a systemd user service,
+  which needs no sudo and works with a Node from nvm. The included `cinemesh-relay.service` is now a user unit. If
+  you run the old system unit, keep your key by copying `/var/lib/cinemesh-relay/seed` to the new seed file
+  (`~/.local/state/cinemesh-relay/seed`, or `/data/seed` in the Docker volume) before the first start.
+
+### Fixed
+
+- Relay: installing it the way the guide said (`npm install -g .`) left out its dependencies, so it failed to start.
+  The guide now installs a packed copy.
 
 ## 0.2.0 - 2026-10-25
 

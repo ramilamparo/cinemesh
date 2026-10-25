@@ -1,26 +1,18 @@
-# systemd unit for the Cinemesh blind relay. Install: see README.md.
+# systemd user unit for the Cinemesh blind relay. Install: see README.md.
 [Unit]
 Description=Cinemesh blind relay
 Documentation=https://github.com/ramilamparo/cinemesh/tree/main/packages/relay
-After=network-online.target
-Wants=network-online.target
 
 [Service]
-ExecStart=/usr/local/bin/cinemesh-relay --port 49737
-# $STATE_DIRECTORY=/var/lib/cinemesh-relay keeps the seed (the relay's key) across restarts and upgrades.
-DynamicUser=yes
+# The install step puts `command -v node` in place of /usr/bin/node (an nvm Node lives under ~/.nvm).
+ExecStart=/usr/bin/node %h/.local/opt/cinemesh-relay/lib/node_modules/cinemesh-relay/bin.js --port 49737
+# $STATE_DIRECTORY=~/.local/state/cinemesh-relay keeps the seed (the relay's key) across restarts and upgrades.
 StateDirectory=cinemesh-relay
 StateDirectoryMode=0700
 Restart=always
 RestartSec=5
 MemoryMax=256M
 NoNewPrivileges=yes
-ProtectSystem=strict
-ProtectHome=yes
-PrivateTmp=yes
-PrivateDevices=yes
-RestrictAddressFamilies=AF_INET AF_INET6
-LockPersonality=yes
 
 [Install]
-WantedBy=multi-user.target
+WantedBy=default.target
