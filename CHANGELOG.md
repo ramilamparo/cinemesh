@@ -7,6 +7,10 @@ workflow (or `npm version`) turns that section into the release's own (scripts/c
 
 ## Unreleased
 
+Nothing yet.
+
+## 0.2.0 - 2026-10-25
+
 ### Added
 
 - Playlists for watching a series: **Host a video…** takes several videos and puts them in episode order, and the
