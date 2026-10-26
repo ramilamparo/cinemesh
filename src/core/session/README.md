@@ -284,6 +284,23 @@ a failing leave is logged, and the active-room marker is cleared either way.
   admitted members, `linked` kept to admitted members other than the sender, `urgent` to pieces of the torrent,
   duplicates dropped, and each sender rate-limited (a burst of 10, 10 a second). Each report replaces the last.
 
+### Catch-up priority (`catch-up.ts`, ADR 0012)
+
+The host's peers tick (1 Hz) runs `pickCatchUp` over its sync peers (itself left out), for the playing item only. A
+viewer starts catching up under 15 s of buffer, or while buffering, when another has at least 10 s more. It stops at
+30 s, or once nobody is more than 5 s ahead. At most a third of the viewers are picked at once (at least one), the
+least buffered first, and those already picked keep their place. Left out:
+
+- `joining` members, whose position is 0 until the room's state reaches them;
+- `no-player`, `disk-full` and `ended` members;
+- members with their own download limit under 1.5 × their bitrate;
+- members whose buffer already reaches the end.
+
+Each picked viewer's range, its position to 30 s on (`catchUpRange`: from the first byte its player reads there),
+goes to `TransferEngine.setViewerCatchUp` every tick, and `null` when it stops. Another item playing ends it on the
+old item's transfer. The transfer marks its peer row `catchUp`, which the peer list shows as "Catching up".
+`catchUpEnabled = false` turns it off (the integration test's baseline).
+
 ### Hash failures
 
 Plan §4.2 "Source-change watchdog". The watchdog compares size and mtime, so a file rewritten in place with both kept,

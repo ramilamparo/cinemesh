@@ -49,4 +49,14 @@ describe('PeerList warnings', () => {
     for (const code of ['slow-download', 'frame-drops', 'hash-fails']) expect(text(m.container)).not.toContain(code)
     expect(consoleError.mock.calls.flat().join(' ')).not.toMatch(/same key/)
   })
+
+  it('tags a viewer the host feeds first while it catches up (ADR 0012)', async () => {
+    m = await mountApp('room-host')
+    expect(text(row(m, 'Sam'))).not.toContain('Catching up')
+    const peers = fx.peers('host').map((p) => (p.name === 'Sam' ? { ...p, catchingUp: true } : p))
+    act(() => m?.fake.emit('peers', peers))
+    await flush()
+    expect(text(row(m, 'Sam'))).toContain('Catching up')
+    expect(text(row(m, 'Ola'))).not.toContain('Catching up')
+  })
 })

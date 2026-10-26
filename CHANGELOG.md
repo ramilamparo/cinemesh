@@ -7,7 +7,11 @@ workflow (or `npm version`) turns that section into the release's own (scripts/c
 
 ## Unreleased
 
-Nothing yet.
+### Added
+
+- When the room is short of upload, the host sends first to a viewer whose buffer runs short while others have
+  plenty (a late joiner, a slower link), until it has caught up, so its playback, and the room's with "wait for
+  everyone", doesn't stop. The host's peer list shows it as **Catching up**. Only the host needs this version.
 
 ## 0.3.0 - 2026-10-26
 

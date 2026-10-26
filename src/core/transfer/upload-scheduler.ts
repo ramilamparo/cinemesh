@@ -9,6 +9,11 @@ export interface UploadSchedulerDeps {
   memberOf(wire: Wire): string | null
   classOf(piece: number): RequestClass
   /**
+   * A member the host feeds first while it catches up (catch-up priority, ADR 0012): within a class its wire's
+   * requests go before everyone else's. Absent = nobody.
+   */
+  boosted?(member: string): boolean
+  /**
    * The UDX stream under the wire's connection: bytes handed to it that it has not sent, and bytes it got
    * acknowledged so far (patches/udx-native+1.21.3.patch). null until known, or on a connection that is not UDX.
    */
@@ -116,7 +121,8 @@ interface Lane {
  *
  * Order: class 0 (a piece some viewer's reader is blocked on), then 1 (the hot window, critical ranges), then 2,
  * across wires: the urgent wire gets the whole rate for a moment. FIFO within a class on a wire (the viewer's own R6
- * order), round-robin between wires. A wire that got nothing for 2 s while holding goes first (aging).
+ * order), round-robin between wires. Within a class, a boosted wire (a viewer catching up, ADR 0012) goes before the
+ * others. A wire that got nothing for 2 s while holding goes first (aging).
  *
  * A request is offered to onArrival first: one the Revealer does not advertise to that wire is refused there and
  * never held. A cancel drops a held request, a choke rejects held ones (BEP 6), as upstream does with queued ones.
@@ -189,13 +195,15 @@ export class UploadScheduler {
   /**
    * Reject (BEP 6) the held class-2 requests of member `id`, whose reader just blocked on a new piece; its WebTorrent
    * refills those slots at once in its R6 order, whose head is now that piece. Returns how many. Not on a wire without
-   * the fast extension: a request it drops is only failed by the viewer's 30 s timeout.
+   * the fast extension: a request it drops is only failed by the viewer's 30 s timeout. `keep` spares the pieces it
+   * returns true for (a viewer starting to catch up keeps what lies just ahead of its playhead).
    */
-  preempt(id: string): number {
+  preempt(id: string, keep?: (piece: number) => boolean): number {
     let n = 0
     for (const l of this.lanes) {
       if (this.memberOf(l) !== id || !l.wire.hasFast) continue
       for (const r of [...l.wire.heldRequests]) {
+        if (keep?.(r.piece)) continue
         if (this.d.classOf(r.piece) === 2 && l.wire.refuseRequest(r.piece, r.offset, r.length)) n++
       }
     }
@@ -343,7 +351,7 @@ export class UploadScheduler {
         if (lane.wire.heldRequests.length === 0 || lane.wire.destroyed) continue
         if (this.queued(lane) >= this.cap(lane)) continue
         const { k, cls } = this.pick(lane)
-        const rank = now - lane.servedAt >= AGING_MS ? -1 : cls
+        const rank = now - lane.servedAt >= AGING_MS ? -1 : 2 * cls + (this.isBoosted(lane) ? 0 : 1)
         if (!best || rank < best.rank) best = { lane, k, rank, i }
         if (rank < 0) break
       }
@@ -393,6 +401,12 @@ export class UploadScheduler {
 
   private cap(l: Lane): number {
     return Math.max(MIN_QUEUE_BYTES, (l.rate * QUEUE_MS) / 1000)
+  }
+
+  private isBoosted(l: Lane): boolean {
+    if (!this.d.boosted) return false
+    const m = this.memberOf(l)
+    return m !== null && this.d.boosted(m)
   }
 
   private memberOf(l: Lane): string | null {

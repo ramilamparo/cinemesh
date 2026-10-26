@@ -282,6 +282,8 @@ export interface PeerView {
   /** one per code, most severe first; the text comes from peerWarningText */
   warnings: PeerWarning[]
   exempt: boolean
+  /** Added: the host feeds this viewer first while its buffer catches up with the others' (ADR 0012). Host only. */
+  catchingUp?: boolean
   lastError?: { code: string; hint: string }
 }
 

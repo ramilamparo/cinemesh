@@ -43,7 +43,7 @@ function setup(
     classes?: Record<number, RequestClass>
     refuse?: number[]
     clock?: { t: number }
-    extra?: Pick<UploadSchedulerDeps, 'bucket' | 'mayRelease' | 'maxHoldMs'>
+    extra?: Pick<UploadSchedulerDeps, 'bucket' | 'mayRelease' | 'maxHoldMs' | 'boosted'>
   } = {},
 ) {
   const peers = new Map<string, EventEmitter & { wire: Wire | null }>()
@@ -256,6 +256,80 @@ describe('UploadScheduler', () => {
     expect(s.preempt('c')).toBe(0) // its WebTorrent would wait 30 s for an answer that never comes
     expect(c.wire.heldRequests).toHaveLength(4)
     expect(s.stats().preempted).toBe(2)
+  })
+
+  it('preempt with keep spares the pieces it keeps (a viewer starting to catch up: its range)', () => {
+    const { s, connect, request } = setup()
+    const a = connect('a', { store: 'manual' })
+    for (const i of [0, 1, 2, 3, 4, 5]) request(a, i)
+    expect(s.preempt('a', (i) => i === 3 || i === 4)).toBe(2)
+    expect([a.rejects, a.wire.heldRequests.map((r) => r.piece)]).toEqual([
+      [2, 5],
+      [3, 4],
+    ])
+  })
+
+  describe('a boosted member (catch-up priority, ADR 0012)', () => {
+    it("goes first within a class, after any wire's class 0", () => {
+      const boosted = new Set(['b'])
+      const { s, clock, connect, request } = setup({ classes: { 9: 0 }, extra: { boosted: (m) => boosted.has(m) } })
+      const a = connect('a', { drain: true })
+      const b = connect('b', { drain: true })
+      const c = connect('c', { drain: true })
+      s.setRate(BLOCK * 50) // one block per 20 ms
+      const order: string[] = []
+      for (const [v, name] of [
+        [a, 'a'],
+        [b, 'b'],
+        [c, 'c'],
+      ] as const)
+        v.wire.on('request', (i: number) => order.push(`${name}${String(i)}`))
+      for (const i of [1, 2]) request(a, i)
+      for (const i of [11, 12, 13]) request(b, i)
+      for (const i of [9, 21]) request(c, i)
+      for (let k = 1; k <= 7; k++) {
+        clock.t = k * 20
+        s.pump()
+      }
+      expect(order.slice(0, 4)).toEqual(['c9', 'b11', 'b12', 'b13'])
+      expect(order.slice(4).sort()).toEqual(['a1', 'a2', 'c21'])
+      boosted.clear() // no longer boosted: round-robin again
+      for (const i of [14, 15]) request(b, i)
+      for (const i of [3, 4]) request(a, i)
+      order.length = 0
+      for (let k = 8; k <= 11; k++) {
+        clock.t = k * 20
+        s.pump()
+      }
+      expect(order.filter((r) => r.startsWith('a'))).toHaveLength(2)
+    })
+
+    it('still lets every other wire through within 2 s (aging)', () => {
+      const { s, clock, connect, request } = setup({ extra: { boosted: (m) => m === 'a' } })
+      const a = connect('a', { drain: true })
+      const b = connect('b', { drain: true })
+      s.setRate(BLOCK * 50)
+      request(b, 1000)
+      const firstB: number[] = []
+      b.wire.on('request', () => firstB.push(clock.t))
+      for (let k = 1; k <= 150 && firstB.length === 0; k++) {
+        request(a, k) // the boosted wire always holds a class-2 request
+        clock.t = k * 20
+        s.pump()
+      }
+      expect(firstB[0]).toBeGreaterThanOrEqual(2000)
+      expect(firstB[0]).toBeLessThanOrEqual(2040)
+    })
+
+    it('does not hold up the others while its own queue is full', () => {
+      const { connect, request } = setup({ extra: { boosted: (m) => m === 'a' } })
+      const a = connect('a', { store: 'manual' }) // its reads never come back: its queue stays at the cap
+      const b = connect('b', { drain: true })
+      for (const i of [1, 2, 3, 4]) request(a, i)
+      for (const i of [11, 12]) request(b, i)
+      expect(a.served).toEqual([1, 2])
+      expect(b.served).toEqual([11, 12])
+    })
   })
 
   it('refuses what a wire asks for past 512 held requests', () => {

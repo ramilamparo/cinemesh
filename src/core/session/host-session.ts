@@ -14,6 +14,7 @@ import type { PeerTransferStats, TransferStats } from '../transfer/engine.js'
 import { HostUplink } from '../transfer/uplink.js'
 import type { Settings } from '../../shared/settings.js'
 import { BaseSession, type SessionDeps } from './base-session.js'
+import { catchUpRange, pickCatchUp } from './catch-up.js'
 import { PLAYHEAD_REASONS, announceName, netLog } from './common.js'
 import { HostSlot } from './host-slot.js'
 import { MAX_SUBS_PER_ITEM, siblingSubtitles } from './playlist-files.js'
@@ -98,6 +99,11 @@ export class HostSession extends BaseSession {
   /** items a switch is on its way to: not removable meanwhile */
   private readonly switchTargets = new Set<HostSlot>()
   private queueRunning = false
+  /** viewers the current item's transfer feeds first (catch-up.ts, ADR 0012), and the item it told */
+  private catchUp: ReadonlySet<string> = new Set()
+  private catchUpSlot: HostSlot | null = null
+  /** catch-up priority on (ADR 0012); integration tests turn it off for a baseline */
+  catchUpEnabled = true
   private lastStallAt: number | null = null
   private peakUpBps = 0
   /** the paced rate of each stats event since the pacer last went steady (at most PACED_WINDOW of them) */
@@ -874,6 +880,7 @@ export class HostSession extends BaseSession {
 
   protected override onPeersTick(): void {
     this.sweepBackground()
+    this.updateCatchUp()
     const slot = this.current
     if (slot?.timeline) {
       const coverage = this.syncPeers()
@@ -916,6 +923,36 @@ export class HostSession extends BaseSession {
   protected override applyUploadLimit(kbps: number | null): void {
     this.uplink.setLimit(kbps)
     for (const s of this.slots) s.setUploadLimit(kbps)
+  }
+
+  /**
+   * Catch-up priority (ADR 0012), once a second: the viewers whose buffer runs short while others have plenty are fed
+   * first by the playing item's transfer, from their position over the next HORIZON_S. Another item playing ends it
+   * on the old one.
+   */
+  private updateCatchUp(): void {
+    const slot = this.current
+    const old = this.catchUpSlot
+    if (old && old !== slot) for (const id of this.catchUp) old.transfer?.setViewerCatchUp(id, null)
+    if (old !== slot) this.catchUp = new Set()
+    this.catchUpSlot = slot
+    const transfer = slot?.transfer ?? null
+    const map = slot?.map ?? null
+    if (!slot || !transfer || !map) return
+    const peers = this.syncPeers().filter((p) => p.id !== this.room.self)
+    const next = this.catchUpEnabled ? pickCatchUp(peers, this.catchUp, slot.durationS) : new Set<string>()
+    for (const id of this.catchUp) {
+      if (next.has(id)) continue
+      transfer.setViewerCatchUp(id, null)
+      this.deps.log.info(`catch-up: ${id.slice(0, 8)} done`)
+    }
+    for (const p of peers) {
+      if (!next.has(p.id) || p.posS === null || p.posS === undefined) continue
+      if (!this.catchUp.has(p.id))
+        this.deps.log.info(`catch-up: ${p.id.slice(0, 8)} has ${(p.bufferedAheadS ?? 0).toFixed(1)} s ahead: fed first`)
+      transfer.setViewerCatchUp(p.id, catchUpRange(map, p.posS))
+    }
+    this.catchUp = next
   }
 
   protected override transferPeers(): readonly PeerTransferStats[] {

@@ -15,7 +15,7 @@ import { ReadOnlyFileStore } from './readonly-store.js'
 import { RECENT_PER_SEGMENT, checkResume } from './resume.js'
 import { MAX_URGENT, Revealer } from './revealer.js'
 import { IncompleteDownloadError, type SavedFiles, saveFile } from './save-file.js'
-import { type ByteRange, type PlayheadPlan, Scheduler } from './scheduler.js'
+import { type ByteRange, type PieceRange, type PlayheadPlan, Scheduler } from './scheduler.js'
 import { SEGMENT_BYTES, SegmentStore } from './segment-store.js'
 import { limitBps } from '../../shared/limits.js'
 import { CodedError } from '../../shared/result.js'
@@ -43,6 +43,8 @@ export interface PeerTransferStats {
    * ratchet (S2). Always set by the engine; optional only for rows built elsewhere.
    */
   reattaches?: number
+  /** host: the member is catching up (setViewerCatchUp, ADR 0012) */
+  catchUp?: boolean
 }
 
 export interface TransferStats {
@@ -220,6 +222,7 @@ export class TransferEngine extends EventEmitter<TransferEvents> {
   private groupCritical: readonly ByteRange[] = []
   private readonly viewerLinks = new Map<string, readonly string[]>()
   private readonly viewerUrgent = new Map<string, readonly number[]>()
+  private readonly viewerCatchUp = new Map<string, PieceRange>()
   /** viewer: the last blockedPieces() emitted, and whether an emit is queued */
   private blockedSent = ''
   private blockedQueued = false
@@ -365,10 +368,26 @@ export class TransferEngine extends EventEmitter<TransferEvents> {
     if (kept.some((i) => !before.includes(i))) this.uploadScheduler?.preempt(memberId)
   }
 
+  /**
+   * Host: viewer `memberId` is catching up (ADR 0012; the session decides who, from the members' sync statuses), and
+   * `range` is the media just ahead of its playhead, in pieces; null ends it. Its upload requests go first within a
+   * class, it is shown the pieces of that range it lacks (held by other viewers or not), a few at a time, and it
+   * gets no other striping work meanwhile. On the start, its held filler requests outside the range are rejected, so
+   * its WebTorrent refills those slots with the range.
+   */
+  setViewerCatchUp(memberId: string, range: PieceRange | null): void {
+    const starting = range !== null && !this.viewerCatchUp.has(memberId)
+    if (range) this.viewerCatchUp.set(memberId, range)
+    else this.viewerCatchUp.delete(memberId)
+    this.revealer?.setCatchUp(memberId, range)
+    if (starting) this.uploadScheduler?.preempt(memberId, (i) => i >= range[0] && i <= range[1])
+  }
+
   /** Host: a viewer left: forget its reports; what it was given alone and did not fetch is assigned again. */
   removeViewer(memberId: string): void {
     this.viewerLinks.delete(memberId)
     this.viewerUrgent.delete(memberId)
+    this.viewerCatchUp.delete(memberId)
     this.revealer?.removeViewer(memberId)
   }
 
@@ -707,6 +726,7 @@ export class TransferEngine extends EventEmitter<TransferEvents> {
       revealer.setCriticalRanges(this.groupCritical)
       for (const [id, linked] of this.viewerLinks) revealer.setLinks(id, linked)
       for (const [id, pieces] of this.viewerUrgent) revealer.setUrgent(id, pieces)
+      for (const [id, range] of this.viewerCatchUp) revealer.setCatchUp(id, range)
       revealer.start()
       this.revealer = revealer
       // after the Revealer's 'wire' listener: a request is offered to its onArrival before it is held
@@ -714,6 +734,7 @@ export class TransferEngine extends EventEmitter<TransferEvents> {
       const uploads = new UploadScheduler(t, {
         memberOf: (wire) => this.memberOf(t, wire),
         classOf: (piece) => revealer.classOf(piece),
+        boosted: (member) => revealer.catchingUp(member),
         transport: (wire) => this.transportOf(t, wire),
         onArrival: (wire, piece) => revealer.onArrival(wire, piece),
         ...(uplink
@@ -917,6 +938,7 @@ export class TransferEngine extends EventEmitter<TransferEvents> {
         amChoking: w.amChoking,
         seeder: have === n,
         reattaches: Math.max(0, (this.attached.get(peerId)?.opens ?? 1) - 1),
+        ...(this.viewerCatchUp.has(peerId) ? { catchUp: true } : {}),
       })
     }
     const down = t.downloadSpeed

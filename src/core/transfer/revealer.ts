@@ -51,6 +51,12 @@ const MIN_HOST_BPS = 1_000_000
 const L1_SECONDS = 25
 /** Pieces taken from one urgent report: a viewer has a few HTTP readers, each blocked on one piece at most. */
 export const MAX_URGENT = 16
+/**
+ * A viewer catching up (ADR 0012) is shown at most this many pieces of its catch-up range that it does not hold yet:
+ * enough to keep the host's lane to it busy, few enough that what peers would have sent it anyway is not all sent
+ * twice.
+ */
+export const CATCH_UP_PIECES = 4
 
 interface View {
   id: string
@@ -112,6 +118,11 @@ interface View {
  * host meanwhile. A group seek clears every exclusive set and takes back what was revealed outside the new window
  * (and its urgent audio ranges) and not fetched (ADR 0008 §4.3); a viewer that leaves drops its view, so what it was given and did not fetch is
  * assigned again.
+ *
+ * Catch-up (setCatchUp, ADR 0012): a viewer whose buffer runs short while others have plenty is shown the next pieces
+ * of its own catch-up range (the media just ahead of its playhead), held by others or not, CATCH_UP_PIECES at a time,
+ * and is given no walk work or rescue meanwhile: the others take its share of the frontier. When it starts, what it
+ * was assigned and is not fetching is taken back, outside the group window and its range.
  */
 export class Revealer {
   private readonly views = new Map<string, View>()
@@ -126,6 +137,8 @@ export class Revealer {
   /** piece -> last reveal or request (ms), for the rescue rule */
   private readonly lastActivity = new Map<number, number>()
   private readonly viewOf = new WeakMap<Wire, View>()
+  /** member -> its catch-up range (ADR 0012), kept across re-attaches */
+  private readonly catchUp = new Map<string, PieceRange>()
   private readonly n: number
   private readonly pieceLength: number
   private plan: PlayheadPlan | null = null
@@ -175,7 +188,7 @@ export class Revealer {
       v.exclusive.clear()
       // until the new window's reveals reach it, a viewer's host wire offers only those, so it would fetch them
       // first, and the window's data would wait behind them in the host's queue (ADR 0008 §4.3)
-      if (!v.open && !v.wire.destroyed) this.retract(v, this.playhead)
+      if (!v.open && !v.wire.destroyed) this.retract(v, this.playhead, this.catchUpSpans(v.id))
     }
   }
 
@@ -216,8 +229,38 @@ export class Revealer {
     if (v && !v.wire.destroyed) this.revealUrgent(v, now)
   }
 
+  /**
+   * Member `id` is catching up (ADR 0012): `range` is the media just ahead of its playhead; null ends it. On the start
+   * (and not on a moved range), what it was assigned and is not fetching is taken back outside the group window and
+   * the range, so the walk gives it to the others.
+   */
+  setCatchUp(id: string, range: PieceRange | null): void {
+    const a = range ? Math.max(0, range[0]) : 0
+    const b = range ? Math.min(this.n - 1, range[1]) : -1
+    if (!range || !Number.isInteger(a) || !Number.isInteger(b) || b < a) {
+      this.catchUp.delete(id)
+      return
+    }
+    const starting = !this.catchUp.has(id)
+    this.catchUp.set(id, [a, b])
+    const v = this.views.get(id)
+    if (!v || v.wire.destroyed || v.open || this.plan === null) return
+    if (starting) {
+      // its assignments go back to the walk; retract() puts back what it is fetching from us (its budget)
+      v.exclusive.clear()
+      this.retract(v, this.playhead, [[a, b]])
+    }
+    this.revealCatchUp(v, this.now())
+  }
+
+  /** Member `id` is catching up (setCatchUp): the upload scheduler serves its wire first within a class. */
+  catchingUp(id: string): boolean {
+    return this.catchUp.has(id)
+  }
+
   removeViewer(id: string): void {
     this.links.delete(id)
+    this.catchUp.delete(id)
     this.countUrgent(this.urgent.get(id), -1)
     this.urgent.delete(id)
     this.views.delete(id)
@@ -270,12 +313,16 @@ export class Revealer {
     }
     for (const v of views) if (v.open) this.takeBack(v)
     for (const v of views) this.revealUrgent(v, now) // what was on its way may be stuck by now
+    for (const v of views) this.revealCatchUp(v, now)
+    const catching = (v: View): boolean => this.catchUp.has(v.id)
     const totalRate = views.reduce((s, v) => s + Math.max(v.rate, 1), 0)
     const budget = (v: View): number =>
       Math.max(MIN_BUDGET, Math.ceil((BUDGET_S * hostBps * Math.max(v.rate, 1)) / totalRate / this.pieceLength))
     const free = (v: View): boolean => v.exclusive.size < budget(v)
     const connected = views.filter((v) => views.some((u) => u !== v && this.linked(v.id, u.id)))
-    const eligible = connected.filter((v) => connected.every((u) => u === v || this.linked(v.id, u.id)))
+    const eligible = connected
+      .filter((v) => connected.every((u) => u === v || this.linked(v.id, u.id)))
+      .filter((v) => !catching(v)) // its share of the frontier goes to the others
     // its lanes are on their way in its next report: fed from the host now, it would take what they bring, and
     // so would every viewer that joined with it
     const waiting = (v: View): boolean => now - v.since < LINK_WAIT_MS && !connected.includes(v)
@@ -297,14 +344,14 @@ export class Revealer {
       if (lacking.some((v) => v.revealed[i])) {
         // assigned, nobody holds it yet: near its deadline and idle for 3 s, one more viewer gets it
         if (this.deadlineS(i) < RESCUE_DEADLINE_S && now - (this.lastActivity.get(i) ?? 0) > RESCUE_IDLE_MS) {
-          const next = lacking.filter((v) => !v.revealed[i]).sort((x, y) => y.rate - x.rate)[0]
+          const next = lacking.filter((v) => !v.revealed[i] && !catching(v)).sort((x, y) => y.rate - x.rate)[0]
           if (next) this.give(next, i, now)
         }
         continue
       }
       if (eligible.length === 0) {
         // nobody can pass it on: each viewer gets it from the host, at its own pace
-        const takers = lacking.filter((v) => free(v) && !waiting(v))
+        const takers = lacking.filter((v) => free(v) && !waiting(v) && !catching(v))
         if (takers.length === 0) return // all at R (or waiting): stop, so reveals stay in plan order
         for (const v of takers) this.give(v, i, now)
         continue
@@ -370,10 +417,10 @@ export class Revealer {
   /**
    * Stop advertising to v what it neither holds nor is fetching from us (its requests waiting to be served: held by
    * the upload scheduler, or being read), nor reported as urgent, and is not critical; with `keep`, nor in that
-   * playhead's window [p, p + w] or its urgent ranges. Fetching ones count against its budget. Nothing when v cannot
-   * be told.
+   * playhead's window [p, p + w] or its urgent ranges; nor in `also` (a catch-up range). Fetching ones count against
+   * its budget. Nothing when v cannot be told.
    */
-  private retract(v: View, keep: PlayheadPieces | null): void {
+  private retract(v: View, keep: PlayheadPieces | null, also: readonly PieceRange[] = []): void {
     if (!canTell(v)) return
     const urgent = this.urgent.get(v.id)
     const fetching = new Set([...v.wire.heldRequests, ...v.wire.peerRequests].map((r) => r.piece))
@@ -383,6 +430,7 @@ export class Revealer {
       // the audio intervals of a poorly interleaved file, which the walk takes first and may lie outside L1
       for (const [a, b] of keep.urgent) kept.fill(1, a, b + 1)
     }
+    for (const [a, b] of also) kept.fill(1, a, b + 1)
     // the plan's end first: v's WebTorrent refills its pipeline with the next piece we still seem to have whenever
     // a donthave fails its requests, and the donthaves come in several reads. In plan order each refill took the
     // next retracted piece, whose donthave was right behind: a pipeline of requests per piece (ADR 0008 §4.1).
@@ -424,6 +472,27 @@ export class Revealer {
     for (const i of this.urgent.get(v.id)?.keys() ?? []) {
       if (!v.revealed[i] && !v.wire.peerPieces.get(i) && !this.onItsWay(v, i, now)) this.show(v, i, now)
     }
+  }
+
+  /**
+   * v is catching up: the first pieces of its range it lacks are shown to it, until CATCH_UP_PIECES of them are
+   * revealed and not held. Held by others or not: they have not been reaching it fast enough. Not its budget: the
+   * walk gives it nothing meanwhile.
+   */
+  private revealCatchUp(v: View, now: number): void {
+    const range = this.catchUp.get(v.id)
+    if (!range || v.open || v.wire.destroyed) return
+    let outstanding = 0
+    for (let i = range[0]; i <= range[1] && outstanding < CATCH_UP_PIECES; i++) {
+      if (v.wire.peerPieces.get(i)) continue
+      if (!v.revealed[i]) this.show(v, i, now)
+      outstanding++
+    }
+  }
+
+  private catchUpSpans(id: string): PieceRange[] {
+    const range = this.catchUp.get(id)
+    return range ? [range] : []
   }
 
   /**

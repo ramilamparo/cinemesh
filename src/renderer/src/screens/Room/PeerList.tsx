@@ -105,6 +105,11 @@ function PeerRow(props: {
             Not waited for
           </span>
         )}
+        {p.catchingUp && (
+          <span className="badge" title="Its buffer is short: the host sends to it first">
+            Catching up
+          </span>
+        )}
         {isHost && !p.self && (
           <button type="button" className="small" style={{ marginLeft: 'auto' }} onClick={props.onKick}>
             Remove…

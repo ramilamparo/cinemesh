@@ -41,6 +41,7 @@ export function mergePeerViews(
       warnings: rowWarnings(s, warnings.get(m.id) ?? []),
       exempt: s?.exempt ?? false,
       posS: s?.posS ?? null,
+      ...(t?.catchUp ? { catchingUp: true } : {}),
       ...(lastError ? { lastError } : {}),
     }
   })

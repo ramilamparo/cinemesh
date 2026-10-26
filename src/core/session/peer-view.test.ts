@@ -86,6 +86,15 @@ describe('mergePeerViews', () => {
     ])
   })
 
+  it('marks a viewer the host feeds first (catch-up, ADR 0012) from its transfer row, and only then', () => {
+    const rows = mergePeerViews(
+      [member('a'), member('b')],
+      [sync('a'), sync('b')],
+      [{ ...transfer('a', 0.1), catchUp: true }, transfer('b', 0.9)],
+    )
+    expect(rows.map((r) => r.catchingUp)).toEqual([true, undefined])
+  })
+
   it("merges the session's own entries with the member's sync warnings: one per code, most severe first", () => {
     const rows = mergePeerViews(
       [member('a'), member('b'), member('c')],

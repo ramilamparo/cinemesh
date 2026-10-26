@@ -797,3 +797,82 @@ describe('Revealer urgent pieces (a viewer’s blocked readers)', () => {
     expect(a.haves).toEqual(range(20, 35))
   })
 })
+
+describe('Revealer catch-up (a viewer whose buffer runs short, ADR 0012)', () => {
+  /** a and b hold the first 31 pieces, c nothing; all linked, the room at piece 10 (window [10, 30]) */
+  const room = () => {
+    const s = setup() // 5 MB/s, 3 viewers: R = 3 each
+    const a = s.connect('a')
+    const b = s.connect('b')
+    const c = s.connect('c')
+    s.link('a', 'b', 'c')
+    for (const i of range(0, 30)) {
+      a.held.add(i)
+      b.held.add(i)
+    }
+    s.r.setPlan(plan(10))
+    s.r.tick()
+    return { ...s, a, b, c }
+  }
+
+  it('shows it the pieces of its range it lacks, held by others or not, 4 at a time, and gives it no walk work', () => {
+    const { r, a, b, c } = room()
+    // held pieces spread through the viewers' own haves: the host shows c only walk work, past what a and b hold
+    const frontier = [...c.haves]
+    expect(frontier.length).toBeGreaterThan(0)
+    expect(frontier.every((i) => i > 30)).toBe(true)
+    r.setCatchUp('c', [10, 25])
+    expect(r.catchingUp('c')).toBe(true)
+    // its walk work goes back to the others: told, and no longer its budget
+    expect([...c.donthaves].sort((x, y) => x - y)).toEqual(frontier)
+    expect(exclusiveOf(r, 'c')).toEqual([])
+    expect(c.haves.slice(frontier.length)).toEqual([10, 11, 12, 13])
+    r.tick()
+    expect(c.haves.slice(frontier.length)).toEqual([10, 11, 12, 13]) // nothing more while those 4 are not in
+    // a and b fetched theirs: their budgets free up, and what c was given goes to them
+    for (const i of [...a.haves, ...b.haves]) {
+      a.held.add(i)
+      b.held.add(i)
+    }
+    r.tick()
+    expect([...a.haves, ...b.haves]).toContain(Math.min(...frontier))
+    c.held.add(10)
+    c.held.add(11)
+    r.tick()
+    expect(c.haves.slice(frontier.length)).toEqual([10, 11, 12, 13, 14, 15])
+    expect(c.haves.filter((i) => i > 30)).toEqual(frontier) // still no walk work
+  })
+
+  it('takes nothing back when only its range moves, and keeps the range through a group seek', () => {
+    const { r, c } = room()
+    r.setCatchUp('c', [10, 25])
+    const told = c.donthaves.length
+    r.setCatchUp('c', [11, 26])
+    expect(c.donthaves).toHaveLength(told)
+    r.setPlan(plan(40, { windowPieces: 5 }))
+    expect(c.donthaves.filter((i) => i >= 11 && i <= 13)).toEqual([]) // 10 left its range: taken back
+  })
+
+  it('ends on null and on removeViewer; the walk gives it work again', () => {
+    const { r, a, b, c } = room()
+    r.setCatchUp('c', [10, 25])
+    r.setCatchUp('c', null)
+    expect(r.catchingUp('c')).toBe(false)
+    for (const i of [...a.haves, ...b.haves]) {
+      a.held.add(i)
+      b.held.add(i)
+    }
+    const before = c.haves.length
+    r.tick()
+    expect(c.haves.slice(before).some((i) => i > 30)).toBe(true)
+    r.setCatchUp('c', [10, 25])
+    r.removeViewer('c')
+    expect(r.catchingUp('c')).toBe(false)
+  })
+
+  it('refuses a range outside the torrent', () => {
+    const { r } = room()
+    r.setCatchUp('c', [N + 5, N + 9])
+    expect(r.catchingUp('c')).toBe(false)
+  })
+})

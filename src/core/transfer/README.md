@@ -91,7 +91,8 @@ viewer.hashFailures() // { total, worst: [piece, failures][] ≤ 8 }: downloaded
 viewer.on('blocked-changed', (pieces) => report()) // report at once, not at the next 1 Hz
 host.setViewerLinks(memberId, linked) // a lane counts once both ends report it
 host.setViewerUrgent(memberId, urgent) // revealed to that viewer at once unless on its way, outside its R; [] clears
-host.removeViewer(memberId) // a viewer left the room (with detach): forgets its links and urgent pieces
+host.setViewerCatchUp(memberId, [from, to]) // catch-up (ADR 0012): fed first, from that piece range; null ends it
+host.removeViewer(memberId) // a viewer left the room (with detach): forgets its links, urgent pieces and catch-up
 
 await trustedBytes(dir, { infoHash, pieceLength, pieceCount, length }) // JoinConfirm: bytes a resume can skip
 
@@ -161,7 +162,12 @@ before WebTorrent's advertisement. Every 250 ms it walks the group plan in the v
   (ADR 0003, Round 5). After the wait the host sends it anyway: a holder with a slow or limited uplink, or one that
   does not serve it (or claims pieces it lacks), would keep the reader blocked.
 - A piece somebody holds spreads through the viewers' `have`s. Only a lacking viewer with no lane to any holder gets it
-  from the host.
+  from the host, or one catching up (below).
+- **Catch-up** (`setViewerCatchUp`, ADR 0012; the host session picks who from the sync statuses): a viewer whose buffer
+  runs short while others have plenty is shown the pieces of its range (its position to 30 s on) that it lacks, held
+  by others or not, at most 4 not yet held at a time, outside its budget. It gets no walk work and no rescue
+  meanwhile. On the start, its unfetched assignments outside the group window and its range are taken back (from the
+  plan's end, as below), so the walk gives them to the others; a group seek keeps its range too.
 - An unheld piece goes to one eligible viewer: lowest `(exclusive + 1) / rate`, below its budget
   `R = max(2, ⌈1.5 s × host upload × rate share / P⌉)`. Host upload: the limit or the upload pacer's rate, whichever
   is lower, else an EWMA of the measured peak; the paced rate and the peak count as at least 1 MB/s. The walk stops at the first piece where every eligible viewer is at R.
@@ -246,12 +252,12 @@ queue behind it. On the host now (viewers keep WebTorrent's throttle for their o
   none when neither applies. The Revealer's budget R and urgent wait follow the same rate (the paced part taken as at
   least 1 MB/s).
 - **Order.** Class 0 (a piece some viewer's reader is blocked on: the urgent reports), then 1 (the hot window,
-  critical ranges), then 2 (`revealer.classOf`), across wires; FIFO within a class on a wire; round-robin between
-  wires. A wire that holds requests and got nothing for 2 s takes the next release whatever its class (a viewer's
+  critical ranges), then 2 (`revealer.classOf`), across wires; within a class, a viewer catching up (ADR 0012) first;
+  FIFO within a class on a wire; round-robin between wires. A wire that holds requests and got nothing for 2 s takes the next release whatever its class (a viewer's
   WebTorrent drops a wire after 30 s without an answer).
 - **Preempt.** `setViewerUrgent` with a piece new in that viewer's report rejects its held class-2 requests, after
   the Revealer has shown the piece: never served, so nothing is sent twice, and its WebTorrent refills those slots at
-  once with the blocked piece.
+  once with the blocked piece. A viewer starting to catch up has those outside its range rejected the same way.
 - A cancel drops a held request; a choke rejects held ones (BEP 6). A wire holding over 512 requests (twice our reqq)
   has the rest refused. A request over 128 KiB is released at once (WebTorrent drops that wire).
 - **Pacer.** Every 50 ms, each viewer's UDX smoothed RTT while its stream sends; every 100 ms, a LEDBAT-like step:
