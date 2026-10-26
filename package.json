@@ -1,7 +1,7 @@
 {
   "name": "cinemesh",
   "productName": "Cinemesh",
-  "version": "0.2.0",
+  "version": "0.3.0",
   "private": true,
   "description": "Watch a local video in sync with friends; the file is shared peer-to-peer",
   "license": "MIT",

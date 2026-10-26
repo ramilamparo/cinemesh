@@ -7,6 +7,10 @@ workflow (or `npm version`) turns that section into the release's own (scripts/c
 
 ## Unreleased
 
+Nothing yet.
+
+## 0.3.0 - 2026-10-26
+
 ### Added
 
 - Drag a video in the room's **Playlist**, or in the list on Home before hosting, to change the order. On Home each
