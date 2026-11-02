@@ -229,7 +229,8 @@ export function connectStore(wt: WtBridge): () => void {
     offs.push(
       useApp.subscribe((s) => {
         const inRoom = isActivePhase(s.core.session?.phase)
-        const title = inRoom ? (s.core.room?.name ?? s.core.session?.fileName ?? null) : null
+        // the video playing now: room.name is the first video's file name and never follows a playlist
+        const title = inRoom ? (s.core.session?.fileName ?? s.core.room?.name ?? null) : null
         // only while true: main's quit prompt then says that quitting interrupts the export
         const saving = isSaving(s)
         const key = JSON.stringify([inRoom, title, saving])

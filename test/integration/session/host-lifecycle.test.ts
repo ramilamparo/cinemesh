@@ -94,6 +94,8 @@ describe.skipIf(!HAVE_FFMPEG)('host session: lifecycle', () => {
     await host.client.request('session.host', { videoPath: video, subtitlePaths: [] })
     await host.client.until('session', (s) => s.phase === 'in-room')
     expect(power.at(-1)).toBe(true)
+    // no name given: the room is named after the host's display name
+    expect(host.client.all('room').at(-1)?.name).toBe("Host's room")
 
     const from = host.client.events.length
     await host.client.request('session.leave', { data: 'keep', end: true })
@@ -101,6 +103,16 @@ describe.skipIf(!HAVE_FFMPEG)('host session: lifecycle', () => {
     // manager's while the leave runs)
     expect(phasesFrom(host, from)).toEqual(['leaving', 'idle'])
     expect(power.at(-1)).toBe(false)
+    await host.manager.shutdown()
+  })
+
+  it("the room takes the host's name for it, trimmed, into the room event and the invite", async () => {
+    const host = member('Host', root)
+    await host.client.request('session.host', { videoPath: video, subtitlePaths: [], name: '  Movie night ' })
+    await host.client.until('session', (s) => s.phase === 'in-room')
+    expect(host.client.all('room').at(-1)?.name).toBe('Movie night')
+    expect((await host.client.request('room.invite', {})).text).toContain('Join "Movie night" on Cinemesh')
+    await host.client.request('session.leave', { data: 'keep', end: true })
     await host.manager.shutdown()
   })
 

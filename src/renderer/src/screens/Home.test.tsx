@@ -109,8 +109,32 @@ describe('Home', () => {
     expect(text(m.container)).toContain('friends.srt')
     await click(byRole(m.container, 'button', 'Start hosting'))
     expect(callsOf(m.fake, 'session.host')).toEqual([
-      { videoPath: '/home/alex/Videos/Big.Buck.Bunny.2160p.HDR.mkv', subtitlePaths: ['/home/alex/Videos/friends.srt'] },
+      {
+        videoPath: '/home/alex/Videos/Big.Buck.Bunny.2160p.HDR.mkv',
+        subtitlePaths: ['/home/alex/Videos/friends.srt'],
+        name: "Alex's room",
+      },
     ])
+  })
+
+  it('names the room "<display name>\'s room" unless the host types another name', async () => {
+    m = await mountApp('home')
+    await click(byRole(m.container, 'button', 'Host a video…'))
+    const field = byLabel(m.container, 'Room name (friends see it in the invite)') as HTMLInputElement
+    expect(field.value).toBe("Alex's room")
+    await typeInto(field, '  Movie night  ')
+    await click(byRole(m.container, 'button', 'Start hosting'))
+    expect(callsOf(m.fake, 'session.host').at(-1)).toMatchObject({ name: 'Movie night' })
+  })
+
+  it('an emptied room name leaves the default to core', async () => {
+    m = await mountApp('home')
+    await click(byRole(m.container, 'button', 'Host a video…'))
+    const field = byLabel(m.container, 'Room name (friends see it in the invite)') as HTMLInputElement
+    await typeInto(field, '')
+    expect(field.placeholder).toBe("Alex's room")
+    await click(byRole(m.container, 'button', 'Start hosting'))
+    expect(callsOf(m.fake, 'session.host').at(-1)).toMatchObject({ name: '' })
   })
 
   it('hosts several videos as a playlist, in episode order', async () => {
@@ -124,7 +148,7 @@ describe('Home', () => {
     await click(byRole(m.container, 'button', 'Remove Show.S01E2.mkv'))
     await click(byRole(m.container, 'button', 'Start hosting'))
     expect(callsOf(m.fake, 'session.host')).toEqual([
-      { videoPath: '/v/Show.S01E1.mkv', subtitlePaths: [], more: ['/v/Show.S01E10.mkv'] },
+      { videoPath: '/v/Show.S01E1.mkv', subtitlePaths: [], more: ['/v/Show.S01E10.mkv'], name: "Alex's room" },
     ])
   })
 
@@ -153,6 +177,7 @@ describe('Home', () => {
         videoPath: '/v/Show.S01E4.mkv',
         subtitlePaths: [],
         more: ['/v/Show.S01E2.mkv', '/v/Show.S01E1.mkv', '/v/Show.S01E3.mkv'],
+        name: "Alex's room",
       },
     ])
   })

@@ -2,6 +2,7 @@ import { useEffect, useState } from 'react'
 import type { NatClass, NatReport, RecentRoom } from '../../../shared/ipc/core'
 import { extractInvite } from '../../../shared/invite-link'
 import { MAX_PLAYLIST_ITEMS, naturalSort } from '../../../shared/media-files'
+import { ROOM_NAME_MAX, defaultRoomName } from '../../../shared/room-name'
 import { THEME_MODES, type ThemeMode } from '../../../shared/theme-tokens'
 import { wt } from '../bridge'
 import { FileName, Modal, Segmented } from '../components/ui'
@@ -70,6 +71,10 @@ function HostCard(): React.JSX.Element {
   const [videos, setVideos] = useState<string[]>([])
   const [subs, setSubs] = useState<string[]>([])
   const [busy, setBusy] = useState(false)
+  // null until the host types: the default then follows the display name
+  const [nameDraft, setNameDraft] = useState<string | null>(null)
+  const displayName = useApp((s) => s.settings?.displayName ?? 'Friend')
+  const name = nameDraft ?? defaultRoomName(displayName)
   const first = videos[0] ?? null
 
   const chooseVideos = async (opts: { add: boolean }): Promise<void> => {
@@ -101,7 +106,13 @@ function HostCard(): React.JSX.Element {
     if (!first) return
     setBusy(true)
     const more = videos.slice(1)
-    await call('session.host', { videoPath: first, subtitlePaths: subs, ...(more.length > 0 ? { more } : {}) })
+    // left empty, core names it after the display name
+    await call('session.host', {
+      videoPath: first,
+      subtitlePaths: subs,
+      ...(more.length > 0 ? { more } : {}),
+      name: name.trim(),
+    })
     setBusy(false)
   }
 
@@ -196,6 +207,19 @@ function HostCard(): React.JSX.Element {
                 Add subtitles…
               </button>
             </div>
+          </div>
+          <div className="stack">
+            <label htmlFor="room-name" className="muted">
+              Room name (friends see it in the invite)
+            </label>
+            <input
+              id="room-name"
+              type="text"
+              value={name}
+              maxLength={ROOM_NAME_MAX}
+              placeholder={defaultRoomName(displayName)}
+              onChange={(e) => setNameDraft(e.target.value)}
+            />
           </div>
           <div className="row">
             <button type="button" className="primary" disabled={busy} onClick={() => void start()}>

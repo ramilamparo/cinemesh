@@ -4,6 +4,7 @@ import type { PlaylistEvent, PrepareEvent, SyncMode } from '../../shared/ipc/cor
 import { MAX_PLAYLIST_ITEMS } from '../../shared/media-files.js'
 import { FASTSTART_REMUX, needsFullDownload } from '../../shared/media/media-map.js'
 import type { PeerWarning } from '../../shared/peer-warnings.js'
+import { roomName } from '../../shared/room-name.js'
 import { CodedError } from '../../shared/result.js'
 import { Blobs, CompositeBlobProvider, MemoryBlobProvider } from '../net/blobs.js'
 import type { RoomRecord } from '../net/identity.js'
@@ -32,6 +33,8 @@ export interface HostInput {
   subtitlePaths: string[]
   /** further videos for the playlist, in order (each takes the subtitles next to it that share its name) */
   more?: string[]
+  /** the room's name (shared/room-name.ts); empty or left out: "<display name>'s room" */
+  name?: string
   resume?: { record: RoomRecord; file: SessionFileData | null }
 }
 
@@ -162,7 +165,7 @@ export class HostSession extends BaseSession {
     }
     const room = input.resume
       ? await Room.resume(input.resume.record, opts)
-      : await Room.create({ ...opts, name: basename(videoPath).slice(0, 64) })
+      : await Room.create({ ...opts, name: roomName(input.name, s.displayName) })
     try {
       room.defineMessage(announceName('preparing'), { hostOnly: true })
       room.defineMessage(announceName('unavailable'), { hostOnly: true, sticky: true })

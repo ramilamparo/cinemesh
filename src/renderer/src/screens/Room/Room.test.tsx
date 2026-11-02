@@ -83,6 +83,27 @@ describe('Room', () => {
     expect(callsOf(m.fake, 'playback.intent')).toHaveLength(2)
   })
 
+  it('the header names the room under the video playing now; the tray names the video', async () => {
+    m = await mountApp('room-host')
+    const s = m.fake.state.session
+    if (!s) throw new Error('no session')
+    const header = (): Element => {
+      const h = m?.container.querySelector('[data-testid="room-body"] header')
+      if (!h) throw new Error('no room header')
+      return h
+    }
+    expect(header().querySelector('h1')?.textContent).toBe(fx.FILE.name)
+    expect(text(header())).toContain("Alex's room")
+    // the playlist moves on: the title and the tray follow, the room keeps its name
+    const next = 'V.H.S.Halloween.2025.1080p.BluRay.x264.AAC5.1.mp4'
+    act(() => m?.fake.emit('session', { ...s, fileName: next }))
+    await flush()
+    expect(header().querySelector('h1')?.textContent).toBe(next)
+    expect(text(header())).toContain("Alex's room")
+    expect(text(header())).not.toContain(fx.FILE.name)
+    expect(m.fake.reports.at(-1)).toEqual({ inRoom: true, title: next })
+  })
+
   it('host control switch sets both permission flags', async () => {
     m = await mountApp('room-host')
     const sw = byRole(m.container, 'switch', 'Let others play, pause and seek')

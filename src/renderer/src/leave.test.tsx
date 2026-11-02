@@ -363,7 +363,7 @@ describe('leaving the room', () => {
     const fake = m.fake
     act(() => emitLeaving(fake))
     await flush()
-    expect(m.fake.reports.at(-1)).toEqual({ inRoom: true, title: "Maya's room" })
+    expect(m.fake.reports.at(-1)).toEqual({ inRoom: true, title: fx.FILE.name })
   })
 })
 
@@ -527,9 +527,9 @@ describe('SessionReport.saving', () => {
       await fake.leaveFlow(0, 'save')
       return { path: SAVED }
     })
-    expect(fake.reports.at(-1)).toEqual({ inRoom: true, title: "Maya's room" })
+    expect(fake.reports.at(-1)).toEqual({ inRoom: true, title: fx.FILE.name })
     await click(byRole(byRole(m.container, 'region', 'The host ended the room'), 'button', 'Save file'))
-    expect(fake.reports.at(-1)).toEqual({ inRoom: true, title: "Maya's room", saving: true })
+    expect(fake.reports.at(-1)).toEqual({ inRoom: true, title: fx.FILE.name, saving: true })
     g.release()
     await flush()
     expect(fake.reports.at(-1)).toEqual({ inRoom: false, title: null })
@@ -537,7 +537,7 @@ describe('SessionReport.saving', () => {
 
   it('after a reload mid-save too, from the snapshot', async () => {
     m = await mountApp('leaving-save')
-    expect(m.fake.reports.at(-1)).toEqual({ inRoom: true, title: "Maya's room", saving: true })
+    expect(m.fake.reports.at(-1)).toEqual({ inRoom: true, title: fx.FILE.name, saving: true })
   })
 
   it("not for other leaves; from this window's own save when core does not say what runs", async () => {
@@ -558,7 +558,7 @@ describe('SessionReport.saving', () => {
       return { path: SAVED }
     })
     await click(byRole(byRole(m.container, 'region', 'The host ended the room'), 'button', 'Save file'))
-    expect(older.reports.at(-1)).toEqual({ inRoom: true, title: "Maya's room", saving: true })
+    expect(older.reports.at(-1)).toEqual({ inRoom: true, title: fx.FILE.name, saving: true })
     g.release()
     await flush()
     expect(older.reports.at(-1)?.saving).toBeUndefined()

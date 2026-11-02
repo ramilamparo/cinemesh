@@ -325,7 +325,7 @@ export function inRoom(role: Role, now: number): StateSlices & Required<Pick<Sta
     },
     room: {
       roomId: ROOM_ID,
-      name: `${role === 'host' ? 'Your' : "Maya's"} room`,
+      name: `${role === 'host' ? 'Alex' : 'Maya'}'s room`,
       ...(role === 'host' ? { invite: INVITE } : {}),
       nat: { class: 'CONSISTENT', host: '203.0.113.7' },
       relay: { status: 'ok' },

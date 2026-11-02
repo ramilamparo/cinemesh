@@ -36,7 +36,7 @@ unsigned-app warnings, installing mpv on Linux, and what to do when friends cann
 
 ## Using it
 
-1. **Host:** on Home, choose **Host a video**, pick a file (and subtitle files, if any) and choose **Start hosting**.
+1. **Host:** on Home, choose **Host a video**, pick a file (and subtitle files, if any), name the room if you like, and choose **Start hosting**.
    Cinemesh prepares the file, then gives you an invite. Use **Copy invite** to share the link, which includes
    download instructions for friends who do not have the app yet.
 2. **Join:** open the `cinemesh://` link, or paste the link or code on Home. Check where the video will be saved

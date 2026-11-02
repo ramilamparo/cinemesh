@@ -672,6 +672,8 @@ export class SessionManager {
               .array(z.string().min(1))
               .max(MAX_PLAYLIST_ITEMS - 1)
               .optional(),
+            // longer is cut to ROOM_NAME_MAX, not refused: the invite keeps only that much anyway
+            name: z.string().max(256).optional(),
           })
           .parse(raw),
     )

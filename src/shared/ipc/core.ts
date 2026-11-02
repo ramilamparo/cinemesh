@@ -117,7 +117,8 @@ export interface CoreRequests {
    * to it that share its name (ADR 0011).
    */
   'session.host': {
-    params: { videoPath: string; subtitlePaths: string[]; more?: string[] }
+    /** `name` (added): the room's name; empty or left out, core calls it "<display name>'s room" */
+    params: { videoPath: string; subtitlePaths: string[]; more?: string[]; name?: string }
     result: { roomId: string; invite: string }
   }
   'session.join': { params: { invite: string }; result: { roomId: string } }

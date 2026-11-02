@@ -20,6 +20,13 @@ Nothing yet.
   subtitle list (it is not switched on for them) and a notice with **Use**. The host can turn viewers' sharing off
   in Host controls, and can remove any shared file; viewers can remove their own. Files are for the video playing
   when shared. Viewers need a host on this version.
+- Name the room on Home before hosting. It starts as "<your display name>'s room". Friends see it in the invite
+  and under the video's name in the room. Rooms used to be named after the first video, which stayed under the
+  title after a playlist moved on to the next one.
+
+### Fixed
+
+- The tray's tooltip names the video playing now, not the first video of a playlist.
 
 ## 0.3.0 - 2026-10-26
 
