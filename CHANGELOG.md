@@ -7,6 +7,10 @@ workflow (or `npm version`) turns that section into the release's own (scripts/c
 
 ## Unreleased
 
+Nothing yet.
+
+## 0.4.0 - 2026-11-02
+
 ### Added
 
 - When the room is short of upload, the host sends first to a viewer whose buffer runs short while others have
