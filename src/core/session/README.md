@@ -16,6 +16,8 @@ is registered, so a request sent at once (a cold start from an invite link) find
 | `viewer-session.ts`      | Join → announce → blobs → JoinConfirm → download/stream server → player/sync. Resume reuses the journal          |
 | `viewer-slot.ts`         | One playlist item on a viewer: torrent and manifest, its download, its stream server                             |
 | `playlist-wire.ts`       | `session.playlist`'s schema and size guard (ADR 0011 §3)                                                         |
+| `shared-subs.ts`         | Subtitle files members share mid-session: the host's list, offers, fetch, disk copies, player (ADR 0013)         |
+| `shared-subs-wire.ts`    | `session.subtitles` and the offer / remove / result messages: schemas, limits, name and text checks              |
 | `playlist-files.ts`      | Sibling subtitles of a video, and a subtitle file name's language and forced flag                                |
 | `announce.ts`            | `session.announce`'s schema; `media-checks.ts`: `crossCheck`, `criticalSpans`, `cachedManifest`                  |
 | `sync-ports.ts`          | Adapters to sync's ports: Clock (`performance.now`), Player, Bus (and host presence), Datagram, Media, Transfer  |

@@ -24,6 +24,7 @@ export function HostPanel(): React.JSX.Element {
 
 function PlaybackSettings(): React.JSX.Element {
   const sync = useApp((s) => s.core.sync)
+  const shared = useApp((s) => s.core.sharedSubs)
   const control = Boolean(sync?.perms.othersPlayPause && sync.perms.othersSeek)
   const startMode: StartMode = sync?.startMode ?? { kind: 'buffered', seconds: 10 }
   // null follows the room's value; a string is an edit in progress
@@ -46,6 +47,13 @@ function PlaybackSettings(): React.JSX.Element {
         checked={control}
         disabled={!sync}
         onChange={(on) => void call('sync.setPerms', { othersPlayPause: on, othersSeek: on })}
+      />
+      <Switch
+        label="Let others share subtitle files"
+        description="Files you share are always offered to everyone."
+        checked={shared?.viewersMayShare ?? true}
+        disabled={!shared}
+        onChange={(on) => void call('subtitles.setViewersMayShare', { on })}
       />
       <Switch
         label="Wait for everyone"

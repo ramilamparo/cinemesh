@@ -97,6 +97,7 @@ const STATE_EVENTS = [
   'tracks',
   'player',
   'playlist',
+  'sharedSubs',
 ] as const satisfies readonly (keyof CoreState)[]
 
 const MAX_TOASTS = 5

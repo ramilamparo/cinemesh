@@ -97,6 +97,11 @@ export const NET_POLICIES: Readonly<Record<string, BusPolicy>> = {
   // the room's playlist (ADR 0011): enforced by every member, also one that never loads it
   'session.playlist': { hostOnly: true, sticky: true },
   'sync.state': { hostOnly: true, sticky: true },
+  // shared subtitle files (ADR 0013): the list is the host's; offers and removals are small and rate-limited
+  'session.subtitles': { hostOnly: true, sticky: true },
+  'session.subtitle-offer': { rate: { burst: 4, everyMs: 15_000 }, maxBytes: 2048 },
+  'session.subtitle-remove': { rate: { burst: 4, everyMs: 15_000 }, maxBytes: 1024 },
+  'session.subtitle-result': { hostOnly: true, maxBytes: 2048 },
   'sync.intentResult': { hostOnly: true },
 }
 

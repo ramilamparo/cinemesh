@@ -16,6 +16,10 @@ Nothing yet.
 - When the room is short of upload, the host sends first to a viewer whose buffer runs short while others have
   plenty (a late joiner, a slower link), until it has caught up, so its playback, and the room's with "wait for
   everyone", doesn't stop. The host's peer list shows it as **Catching up**. Only the host needs this version.
+- Share a subtitle file while the room plays: **Share a subtitle file…** under Your player. Everyone gets it in their
+  subtitle list (it is not switched on for them) and a notice with **Use**. The host can turn viewers' sharing off
+  in Host controls, and can remove any shared file; viewers can remove their own. Files are for the video playing
+  when shared. Viewers need a host on this version.
 
 ## 0.3.0 - 2026-10-26
 

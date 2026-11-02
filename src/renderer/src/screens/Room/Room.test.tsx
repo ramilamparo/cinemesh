@@ -545,4 +545,44 @@ describe('Room', () => {
     await click(byRole(m.container, 'button', 'Show player'))
     expect(callsOf(m.fake, 'player.reopen')).toHaveLength(1)
   })
+
+  it('a viewer shares a subtitle file, uses one shared by others, and removes only its own', async () => {
+    m = await mountApp('room-viewer')
+    const list = byRole(m.container, 'list', 'Shared subtitle files')
+    expect(text(list)).toContain('Arrival.2016.en.sdh.srt')
+    expect(text(list)).toContain('downloading…')
+    // Maya's file: Use, no Remove
+    expect(queryByRole(list, 'button', 'Stop sharing Arrival.2016.en.sdh.srt')).toBeNull()
+    await click(byRole(list, 'button', 'Use Arrival.2016.en.sdh.srt'))
+    expect(callsOf(m.fake, 'subtitles.use')).toEqual([{ hash: 'a'.repeat(64) }])
+
+    await click(byRole(m.container, 'button', 'Share a subtitle file…'))
+    expect(callsOf(m.fake, 'subtitles.share')).toEqual([{ path: '/home/alex/Videos/friends.srt' }])
+    expect(text(byRole(m.container, 'region', 'Notifications'))).toContain('Shared friends.srt with the room.')
+    await click(byRole(list, 'button', 'Stop sharing friends.srt'))
+    const [removed] = callsOf(m.fake, 'subtitles.remove') as { hash: string }[]
+    expect(removed?.hash).toMatch(/^[0-9a-f]{64}$/)
+    expect(text(list)).not.toContain('friends.srt')
+  })
+
+  it('a viewer cannot share once the host turned it off, and is told why', async () => {
+    m = await mountApp('room-viewer')
+    act(() => m?.fake.emit('sharedSubs', { ...fx.sharedSubs('viewer'), viewersMayShare: false }))
+    await flush()
+    const share = byRole(m.container, 'button', 'Share a subtitle file…')
+    expect(share.hasAttribute('disabled')).toBe(true)
+    expect(text(m.container)).toContain('The host turned off sharing subtitle files.')
+  })
+
+  it("the host turns viewers' subtitle sharing off", async () => {
+    m = await mountApp('room-host')
+    const sw = byRole(m.container, 'switch', 'Let others share subtitle files')
+    expect(sw.getAttribute('aria-checked')).toBe('true')
+    await click(sw)
+    expect(callsOf(m.fake, 'subtitles.setViewersMayShare')).toEqual([{ on: false }])
+    expect(sw.getAttribute('aria-checked')).toBe('false')
+    // the host may always share, and remove anyone's file
+    expect(byRole(m.container, 'button', 'Share a subtitle file…').hasAttribute('disabled')).toBe(false)
+    expect(byRole(m.container, 'button', 'Stop sharing Arrival.2016.en.sdh.srt')).toBeTruthy()
+  })
 })

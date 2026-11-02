@@ -159,17 +159,20 @@ One `Protomux.from(conn)` per Hyperswarm connection.
   - `receive` never throws for what a remote sent: a handler, the hand-over hook or a link that fails on it is reported as a `fault` event (the room logs it) and the rest still run. It runs inside the link's message callback, where a throw makes Protomux destroy that connection, and a `TypeError` crashes the process (safety-catch). Our own `publish` still throws what its local handlers throw. `PeerLink.sendAuth`/`sendCtrl` never throw either (false over the lane's limit), and the room runs `onCtrl`/`onDatagram` handlers the same guarded way.
 - **Sticky messages** keep the newest `rev` per name, and are replayed with `ttl: 0` to every newly admitted link. `rev` is wall-clock milliseconds, monotonic per publisher, so a restarted host's state supersedes what members kept.
 
-| Name                             | Policy                | Body                                                                                                                        |
-| -------------------------------- | --------------------- | --------------------------------------------------------------------------------------------------------------------------- |
-| `room.members`                   | host-only, sticky     | `{members: [{key, name, role}], banned: [hex] (last 32)}`                                                                   |
-| `room.state`                     | host-only, sticky     | `{name, relayKey, admission, maxMembers, inviteEpoch}` (the plan's `room`★)                                                 |
-| `room.rekey`                     | host-only, sticky     | `{secret, inviteEpoch}`                                                                                                     |
-| `room.admission`                 | host-only, addressed  | `{state: 'admitted'\|'pending'\|'denied'\|'kicked', reason?, nonce?}`: `nonce` is the attempt it answers (deviation 16)     |
-| `room.join-req`                  | never on the bus      | `{name, nonce, at}`, signed by the joiner. On the auth lane only: to the host, or to a member that relays it.               |
-| `room.join-via`                  | members, rate-limited | `{req}`: a joiner's `room.join-req`, relayed to the host (`to`) by the member it was sent to. 6, then 1 per `rejoinMs / 6`. |
-| `room.hb`                        | members               | `{at}`: the host every 1 s, other members every 5 s (see deviation 14).                                                     |
-| `session.announce`, `sync.state` | host-only, sticky     | owned by the session and sync modules                                                                                       |
-| `sync.intentResult`              | host-only             | owned by sync                                                                                                               |
+| Name                                | Policy                | Body                                                                                                                        |
+| ----------------------------------- | --------------------- | --------------------------------------------------------------------------------------------------------------------------- |
+| `room.members`                      | host-only, sticky     | `{members: [{key, name, role}], banned: [hex] (last 32)}`                                                                   |
+| `room.state`                        | host-only, sticky     | `{name, relayKey, admission, maxMembers, inviteEpoch}` (the plan's `room`★)                                                 |
+| `room.rekey`                        | host-only, sticky     | `{secret, inviteEpoch}`                                                                                                     |
+| `room.admission`                    | host-only, addressed  | `{state: 'admitted'\|'pending'\|'denied'\|'kicked', reason?, nonce?}`: `nonce` is the attempt it answers (deviation 16)     |
+| `room.join-req`                     | never on the bus      | `{name, nonce, at}`, signed by the joiner. On the auth lane only: to the host, or to a member that relays it.               |
+| `room.join-via`                     | members, rate-limited | `{req}`: a joiner's `room.join-req`, relayed to the host (`to`) by the member it was sent to. 6, then 1 per `rejoinMs / 6`. |
+| `room.hb`                           | members               | `{at}`: the host every 1 s, other members every 5 s (see deviation 14).                                                     |
+| `session.announce`, `sync.state`    | host-only, sticky     | owned by the session and sync modules                                                                                       |
+| `sync.intentResult`                 | host-only             | owned by sync                                                                                                               |
+| `session.subtitles`                 | host-only, sticky     | shared subtitle files (ADR 0013), owned by the session                                                                      |
+| `session.subtitle-offer`, `-remove` | members, rate-limited | to the host (`to`): 4, then 1 per 15 s; at most 2 KiB / 1 KiB                                                               |
+| `session.subtitle-result`           | host-only, addressed  | the answer to an offer or a removal                                                                                         |
 
 ## Invariants
 

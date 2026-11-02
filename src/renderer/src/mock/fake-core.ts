@@ -448,6 +448,30 @@ export class FakeCore {
       return null
     })
     this.handle('player.reopen', () => null)
+    // shared subtitles (ADR 0013): listed at once, as core would once the host has the file
+    const shared = (): fx.StateSlices['sharedSubs'] & object => {
+      const v = this.state.sharedSubs
+      if (!v) throw new CodedError('not-ready', 'The room is still opening')
+      return v
+    }
+    this.handle('subtitles.share', ({ path }) => {
+      const v = shared()
+      const name = path.slice(Math.max(path.lastIndexOf('/'), path.lastIndexOf('\\')) + 1)
+      const hash = Array.from({ length: 64 }, () => Math.floor(Math.random() * 16).toString(16)).join('')
+      const item = { hash, name, lang: null, byName: 'You', mine: true, canRemove: true, state: 'ready' as const }
+      this.emit('sharedSubs', { ...v, items: [...v.items, item] })
+      return { hash }
+    })
+    this.handle('subtitles.remove', ({ hash }) => {
+      const v = shared()
+      this.emit('sharedSubs', { ...v, items: v.items.filter((i) => i.hash !== hash) })
+      return null
+    })
+    this.handle('subtitles.use', () => null)
+    this.handle('subtitles.setViewersMayShare', ({ on }) => {
+      this.emit('sharedSubs', { ...shared(), viewersMayShare: on })
+      return null
+    })
     this.handle('transfer.saveFile', async ({ dest }) => {
       // like core: refused (still in the room) while the download is incomplete
       if ((this.state.transfer?.progress ?? 0) < 1) {

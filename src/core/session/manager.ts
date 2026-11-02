@@ -860,6 +860,38 @@ export class SessionManager {
       (raw) => empty.parse(raw),
     )
 
+    // ---- shared subtitles (ADR 0013) ----
+    const subHash = z.object({ hash: z.string().regex(/^[0-9a-f]{64}$/) })
+    r.handle(
+      'subtitles.share',
+      (p) => this.session().shareSubtitle(p.path),
+      (raw) => z.object({ path: z.string().min(1).max(4096) }).parse(raw),
+    )
+    r.handle(
+      'subtitles.remove',
+      async (p) => {
+        await this.session().removeSharedSubtitle(p.hash)
+        return null
+      },
+      (raw) => subHash.parse(raw),
+    )
+    r.handle(
+      'subtitles.use',
+      async (p) => {
+        await this.session().useSharedSubtitle(p.hash)
+        return null
+      },
+      (raw) => subHash.parse(raw),
+    )
+    r.handle(
+      'subtitles.setViewersMayShare',
+      (p) => {
+        this.host().setViewersMayShare(p.on)
+        return null
+      },
+      (raw) => z.object({ on: z.boolean() }).parse(raw),
+    )
+
     // ---- sync ----
     const engine = () => {
       const e = this.session().syncEngine()

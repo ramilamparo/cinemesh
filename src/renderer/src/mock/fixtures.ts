@@ -9,6 +9,7 @@ import type {
   Role,
   SessionEvent,
   SyncEvent,
+  SharedSubsEvent,
   TracksEvent,
 } from '../../../shared/ipc/core'
 import type { PeerWarning } from '../../../shared/peer-warnings'
@@ -283,6 +284,34 @@ export function timeline(role: Role): CoreEvents['timeline'] {
   }
 }
 
+/** Two files shared in the room (ADR 0013): one by Maya (ready), one by the host (a viewer is still downloading it). */
+export function sharedSubs(role: Role): SharedSubsEvent {
+  return {
+    available: true,
+    viewersMayShare: true,
+    items: [
+      {
+        hash: 'a'.repeat(64),
+        name: 'Arrival.2016.en.sdh.srt',
+        lang: 'en',
+        byName: 'Maya',
+        mine: false,
+        canRemove: role === 'host',
+        state: 'ready',
+      },
+      {
+        hash: 'b'.repeat(64),
+        name: 'Arrival.2016.pt-BR.srt',
+        lang: 'pt-BR',
+        byName: role === 'host' ? 'You' : 'Sam',
+        mine: role === 'host',
+        canRemove: role === 'host',
+        state: role === 'host' ? 'ready' : 'fetching',
+      },
+    ],
+  }
+}
+
 export function inRoom(role: Role, now: number): StateSlices & Required<Pick<StateSlices, 'session' | 'sync'>> {
   return {
     session: {
@@ -319,6 +348,7 @@ export function inRoom(role: Role, now: number): StateSlices & Required<Pick<Sta
     },
     tracks: tracks(),
     player: player('ready'),
+    sharedSubs: sharedSubs(role),
   }
 }
 

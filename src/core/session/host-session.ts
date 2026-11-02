@@ -5,9 +5,10 @@ import { MAX_PLAYLIST_ITEMS } from '../../shared/media-files.js'
 import { FASTSTART_REMUX, needsFullDownload } from '../../shared/media/media-map.js'
 import type { PeerWarning } from '../../shared/peer-warnings.js'
 import { CodedError } from '../../shared/result.js'
-import { Blobs, MemoryBlobProvider } from '../net/blobs.js'
+import { Blobs, CompositeBlobProvider, MemoryBlobProvider } from '../net/blobs.js'
 import type { RoomRecord } from '../net/identity.js'
 import { Room, type RoomState } from '../net/room.js'
+import type { SubtitleSpec } from '../player/player-controller.js'
 import { type CarryChoice, captureChoice, planCarry } from '../player/track-carry.js'
 import type { GroupSnapshot } from '../sync/group.js'
 import type { PeerTransferStats, TransferStats } from '../transfer/engine.js'
@@ -123,7 +124,13 @@ export class HostSession extends BaseSession {
     super(deps, room)
     this.file = file
     this.slots.push(...items)
-    this.blobs = new Blobs(room, this.provider)
+    const shared = this.createSharedSubs({
+      fetch: (hash, size) => this.blobs.fetch(hash, { size, signal: this.abort.signal }),
+      currentItem: () => this.current?.infoHash ?? null,
+      knownItem: (infoHash) => this.slots.some((s) => s.infoHash === infoHash),
+      viewersMayShare: true,
+    })
+    this.blobs = new Blobs(room, new CompositeBlobProvider([this.provider, shared.provider]))
     const f = input.resume?.file
     this.rev = f?.playlistRev !== undefined ? f.playlistRev + RESUME_SEQ_GAP : 0
     this.autoAdvance = f?.autoAdvance ?? deps.settings().hostDefaults.autoAdvance
@@ -228,6 +235,7 @@ export class HostSession extends BaseSession {
   }
 
   private begin(): void {
+    this.shared?.start()
     const first = this.openingSlot()
     this.setSession({ phase: 'preparing', role: 'host', fileName: first.name, fileSize: first.size || null })
     void this.open(first).catch((e: unknown) => {
@@ -421,6 +429,8 @@ export class HostSession extends BaseSession {
       void this.player?.setPaused(true).catch(() => undefined)
     }
     this.current = slot
+    // before the load below: the item's shared subtitles on disk now come with it
+    this.shared?.refresh()
     if (prev && prev !== slot) await this.retire(prev)
     this.assertLive()
 
@@ -459,8 +469,12 @@ export class HostSession extends BaseSession {
     this.publishPlaylist()
     if (slot.announce) this.room.publish(announceName('announce'), slot.announce)
 
-    if (!this.player) this.createPlayer({ title: slot.name, subtitles: () => this.current?.subtitles ?? [] })
-    const carry = opts.carry && slot.manifest ? planCarry(opts.carry, slot.manifest.tracks, slot.carrySubs()) : null
+    const subtitles = (s: HostSlot): SubtitleSpec[] => [...s.subtitles, ...(this.shared?.specsFor(s.infoHash) ?? [])]
+    if (!this.player) {
+      this.createPlayer({ title: slot.name, subtitles: () => (this.current ? subtitles(this.current) : []) })
+    }
+    const carrySubs = [...slot.carrySubs(), ...(this.shared?.carrySubs(slot.infoHash) ?? [])]
+    const carry = opts.carry && slot.manifest ? planCarry(opts.carry, slot.manifest.tracks, carrySubs) : null
     const map = slot.map
     const manifest = slot.manifest
     const durationS = slot.durationS ?? 0
@@ -470,7 +484,7 @@ export class HostSession extends BaseSession {
     const hd = settings.hostDefaults
     const group = opts.group
     const engine = this.startSync({
-      subtitles: () => slot.subtitles,
+      subtitles: () => subtitles(slot),
       media: new MediaPortAdapter({
         map,
         manifest,
@@ -782,6 +796,11 @@ export class HostSession extends BaseSession {
     this.emitPlaylist(true)
   }
 
+  /** subtitles.setViewersMayShare (ADR 0013): files already shared stay. */
+  setViewersMayShare(on: boolean): void {
+    this.shared?.setViewersMayShare(on)
+  }
+
   cancelAdvance(): void {
     this.clearAdvance()
     this.waitingNext = false
@@ -823,6 +842,7 @@ export class HostSession extends BaseSession {
     } catch (e) {
       this.deps.log.warn(`could not publish the playlist: ${e instanceof Error ? e.message : String(e)}`)
     }
+    this.shared?.pruneItems((infoHash) => this.slots.some((s) => s.infoHash === infoHash))
     this.file?.update({ playlistRev: this.rev })
   }
 
@@ -879,6 +899,7 @@ export class HostSession extends BaseSession {
   }
 
   protected override onPeersTick(): void {
+    this.shared?.refresh()
     this.sweepBackground()
     this.updateCatchUp()
     const slot = this.current

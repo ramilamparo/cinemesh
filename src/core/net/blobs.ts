@@ -73,6 +73,19 @@ export class FileBlobProvider implements BlobProvider {
   }
 }
 
+/** Asks each provider in turn: the session's metadata in memory, then shared subtitle files on disk (ADR 0013). */
+export class CompositeBlobProvider implements BlobProvider {
+  constructor(private readonly providers: readonly BlobProvider[]) {}
+
+  async read(hash: string, offset: number, len: number): Promise<{ total: number; data: Uint8Array } | null> {
+    for (const p of this.providers) {
+      const r = await p.read(hash, offset, len)
+      if (r) return r
+    }
+    return null
+  }
+}
+
 /** The part of Room that blobs need. */
 export interface BlobRoom {
   peers(): RoomPeer[]

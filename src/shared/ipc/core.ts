@@ -188,6 +188,18 @@ export interface CoreRequests {
   'playlist.setAutoAdvance': { params: { on: boolean }; result: null }
   /** Stops the countdown to the next item (PlaylistEvent.advance) until the room next reaches an end. */
   'playlist.cancelAdvance': { params: Empty; result: null }
+  /**
+   * Added (ADR 0013): subtitle files members share while the room plays, for the playing item. share reads the file
+   * and lists it (host) or offers it to the host, which fetches it first (viewer); refused with 'bad-type' (not a text
+   * .srt/.ass/.ssa/.vtt), 'too-large' (over 4 MB), 'duplicate', 'sharing-off' (the host turned viewers' sharing off),
+   * 'not-supported' (an older host), 'item-full' / 'subtitles-full', 'not-ready' (nothing plays yet), 'timeout'. Others
+   * get it in their player's subtitle list and a toast whose Use runs subtitles.use. remove: its sharer or the host
+   * ('not-yours' otherwise); players that have it keep it until the video next loads. setViewersMayShare: host only.
+   */
+  'subtitles.share': { params: { path: string }; result: { hash: string } }
+  'subtitles.remove': { params: { hash: string }; result: null }
+  'subtitles.use': { params: { hash: string }; result: null }
+  'subtitles.setViewersMayShare': { params: { on: boolean }; result: null }
   'net.test': { params: Empty; result: NatReport }
   'diagnostics.get': { params: Empty; result: CoreDiagnostics }
 }
@@ -403,6 +415,26 @@ export interface PlaylistItemView {
   local?: { state: PlaylistLocalState; progress: number; downBps: number }
 }
 
+/** Added (ADR 0013): one shared subtitle file of the playing item, as this member sees it. */
+export interface SharedSubView {
+  hash: string
+  name: string
+  lang: string | null
+  /** the sharer's display name ('' when unknown) */
+  byName: string
+  mine: boolean
+  canRemove: boolean
+  /** 'ready': on this machine and in the player's subtitle list */
+  state: 'fetching' | 'ready' | 'error'
+}
+
+/** Added (ADR 0013). `available`: the host shares subtitles (false with an older host). */
+export interface SharedSubsEvent {
+  available: boolean
+  viewersMayShare: boolean
+  items: SharedSubView[]
+}
+
 export interface NoticeEvent {
   level: 'info' | 'warn' | 'error'
   code: string
@@ -424,6 +456,7 @@ export interface CoreEvents {
   tracks: TracksEvent
   player: PlayerEvent
   playlist: PlaylistEvent
+  sharedSubs: SharedSubsEvent
   notice: NoticeEvent
 }
 

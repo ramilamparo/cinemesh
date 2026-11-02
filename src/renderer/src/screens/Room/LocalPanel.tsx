@@ -1,7 +1,9 @@
 import { useEffect, useRef, useState } from 'react'
-import type { PlayerEvent, TrackInfo } from '../../../../shared/ipc/core'
+import type { PlayerEvent, SharedSubView, TrackInfo } from '../../../../shared/ipc/core'
+import { fileNameOf } from '../../../../shared/media-files'
+import { wt } from '../../bridge'
 import { call } from '../../rpc'
-import { useApp } from '../../store'
+import { pushToast, useApp } from '../../store'
 import styles from './Room.module.css'
 
 function trackLabel(t: TrackInfo): string {
@@ -133,6 +135,7 @@ export function LocalPanel(): React.JSX.Element {
           </button>
         </div>
       </div>
+      <SharedSubtitles />
       <div className="row">
         <button type="button" onClick={() => void call('player.reopen', {})}>
           Show player
@@ -142,5 +145,89 @@ export function LocalPanel(): React.JSX.Element {
         </span>
       </div>
     </section>
+  )
+}
+
+const SHARED_STATE_TEXT: Record<SharedSubView['state'], string> = {
+  fetching: 'downloading…',
+  ready: '',
+  error: 'could not download',
+}
+
+/** Subtitle files members share while the room plays (ADR 0013): everyone gets them in their subtitle list. */
+function SharedSubtitles(): React.JSX.Element | null {
+  const shared = useApp((s) => s.core.sharedSubs)
+  const isHost = useApp((s) => s.core.session?.role === 'host')
+  const [busy, setBusy] = useState(false)
+  if (!shared) return null
+  const canShare = shared.available && (isHost || shared.viewersMayShare)
+  const why = !shared.available
+    ? "The host's Cinemesh is too old to share subtitle files."
+    : canShare
+      ? null
+      : 'The host turned off sharing subtitle files.'
+
+  const share = async (): Promise<void> => {
+    const paths = await wt().app.pickSubtitles()
+    if (paths.length === 0) return
+    setBusy(true)
+    try {
+      for (const path of paths) {
+        const r = await call('subtitles.share', { path })
+        if (r.ok) {
+          pushToast({ level: 'info', message: `Shared ${fileNameOf(path)} with the room.`, code: 'subtitles.own' })
+        }
+      }
+    } finally {
+      setBusy(false)
+    }
+  }
+
+  return (
+    <div className="stack" style={{ gap: 6 }}>
+      <div className="row">
+        <button type="button" className="small" disabled={!canShare || busy} onClick={() => void share()}>
+          {busy ? 'Sharing…' : 'Share a subtitle file…'}
+        </button>
+        <span className="muted" style={{ fontSize: 12 }}>
+          {why ?? 'Shared files show up in everyone’s subtitle list.'}
+        </span>
+      </div>
+      {shared.items.length > 0 && (
+        <ul className={styles.sharedSubs} aria-label="Shared subtitle files">
+          {shared.items.map((item) => (
+            <li key={item.hash}>
+              <span className={styles.sharedSubName} title={item.name}>
+                {item.name}
+              </span>
+              <span className="muted">
+                {item.mine ? 'you' : item.byName || 'someone'}
+                {SHARED_STATE_TEXT[item.state] ? ` · ${SHARED_STATE_TEXT[item.state]}` : ''}
+              </span>
+              {item.state === 'ready' && (
+                <button
+                  type="button"
+                  className="small"
+                  aria-label={`Use ${item.name}`}
+                  onClick={() => void call('subtitles.use', { hash: item.hash })}
+                >
+                  Use
+                </button>
+              )}
+              {item.canRemove && (
+                <button
+                  type="button"
+                  className="small"
+                  aria-label={`Stop sharing ${item.name}`}
+                  onClick={() => void call('subtitles.remove', { hash: item.hash })}
+                >
+                  Remove
+                </button>
+              )}
+            </li>
+          ))}
+        </ul>
+      )}
+    </div>
   )
 }

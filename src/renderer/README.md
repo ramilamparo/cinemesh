@@ -224,6 +224,11 @@ core.ts
   `transfer.finishExport: {roomId, giveUp?} → {outcome: 'finished' | 'waiting' | 'rejoin', path?}`. Core posts
   `transfer.export-finished` (with `path`) for every finished save, and `transfer.export-waiting` (action Finish saving
   → `transfer.finishExport {roomId}`) when a save's folder is not there.
+- (ADR 0013) Event `sharedSubs: {available, viewersMayShare, items: SharedSubView[]}` (the playing item's shared
+  subtitle files) and requests `subtitles.share {path} → {hash}`, `subtitles.remove {hash}`, `subtitles.use {hash}`,
+  `subtitles.setViewersMayShare {on}` (host). LocalPanel lists the files under the track pickers with Share a subtitle
+  file… (`pickSubtitles`), Use and Remove; HostPanel has the switch. Core's notice for another member's file carries
+  the action Use → `subtitles.use {hash}`.
 
 app.ts
 

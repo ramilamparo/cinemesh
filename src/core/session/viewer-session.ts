@@ -3,9 +3,10 @@ import { resolve } from 'node:path'
 import { z } from 'zod'
 import type { NoticeEvent, PlaylistEvent, PlaylistItemView, SessionPhase } from '../../shared/ipc/core.js'
 import { CodedError } from '../../shared/result.js'
-import { Blobs, MemoryBlobProvider } from '../net/blobs.js'
+import { Blobs, CompositeBlobProvider, MemoryBlobProvider } from '../net/blobs.js'
 import type { RoomRecord } from '../net/identity.js'
 import { Room, type RoomState } from '../net/room.js'
+import type { SubtitleSpec } from '../player/player-controller.js'
 import { type CarryChoice, captureChoice, planCarry } from '../player/track-carry.js'
 import type { OffsetEstimator } from '../sync/clock.js'
 import { type SpaceCheck, checkSpace, freeBytes } from '../transfer/disk.js'
@@ -118,7 +119,11 @@ export class ViewerSession extends BaseSession {
     private readonly resumeFile: SessionFileData | null,
   ) {
     super(deps, room)
-    this.blobs = new Blobs(room, this.provider)
+    const shared = this.createSharedSubs({
+      fetch: (hash, size) => this.blobs.fetch(hash, { size, signal: this.abort.signal }),
+      currentItem: () => this.current?.infoHash ?? null,
+    })
+    this.blobs = new Blobs(room, new CompositeBlobProvider([this.provider, shared.provider]))
     for (const e of resumeFile?.playlist ?? []) if (e.infoHash) this.entries.set(e.infoHash, e)
   }
 
@@ -143,6 +148,7 @@ export class ViewerSession extends BaseSession {
 
   private begin(): void {
     this.setSession({ phase: 'connecting', role: 'viewer' })
+    this.shared?.start()
     this.unsubs.push(
       this.room.onMessage(announceName('preparing'), (m) => {
         const p = PreparingSchema.safeParse(m.body)
@@ -506,6 +512,8 @@ export class ViewerSession extends BaseSession {
     this.current = slot
     this.joinSlot = slot
     this.noSpace = false
+    // before the load: the item's shared subtitles on disk now come with it
+    this.shared?.refresh()
     const a = slot.announce
     this.setSession({ fileName: a.name, fileSize: a.fileSize, durationS: a.durationMs / 1000 })
     this.setMedia(slot)
@@ -552,7 +560,10 @@ export class ViewerSession extends BaseSession {
     this.checkHostFile()
 
     if (!this.player) {
-      const player = this.createPlayer({ title: a.name, subtitles: () => this.current?.subtitles() ?? [] })
+      const player = this.createPlayer({
+        title: a.name,
+        subtitles: () => (this.current ? this.subtitlesOf(this.current) : []),
+      })
       player.on('fileLoaded', () => {
         if (this.current) this.current.fileOpened = true
       })
@@ -562,9 +573,10 @@ export class ViewerSession extends BaseSession {
         if (this.current?.holdingSource() && this.sync) player.osc('toast', { text: FULL_DOWNLOAD.message })
       })
     }
-    const carry = opts.carry && slot.manifest ? planCarry(opts.carry, slot.manifest.tracks, slot.carrySubs()) : null
+    const carrySubs = [...slot.carrySubs(), ...(this.shared?.carrySubs(slot.infoHash) ?? [])]
+    const carry = opts.carry && slot.manifest ? planCarry(opts.carry, slot.manifest.tracks, carrySubs) : null
     const engine = this.startSync({
-      subtitles: () => slot.subtitles(),
+      subtitles: () => this.subtitlesOf(slot),
       media: slot.mediaPort({ positionS: () => this.sync?.roomPosition() ?? 0 }),
       transfer: slot.transferPort({
         settings: () => this.deps.settings(),
@@ -580,6 +592,11 @@ export class ViewerSession extends BaseSession {
     })
     this.giveSource()
     this.emitPlaylist()
+  }
+
+  /** The torrent's subtitles, then the files members shared for the item (ADR 0013). */
+  private subtitlesOf(slot: ViewerSlot): SubtitleSpec[] {
+    return [...slot.subtitles(), ...(this.shared?.specsFor(slot.infoHash) ?? [])]
   }
 
   private slotEvents(slot: ViewerSlot): SlotEvents {
@@ -680,6 +697,7 @@ export class ViewerSession extends BaseSession {
     } catch (e) {
       // nothing plays: the retry (switchFailed) starts the item afresh
       this.current = null
+      this.shared?.refresh()
       this.stopSync()
       if (!this.joinCancelled()) await this.close(slot, 'keep')
       throw e
@@ -955,6 +973,7 @@ export class ViewerSession extends BaseSession {
   }
 
   protected override onPeersTick(): void {
+    this.shared?.refresh()
     this.emitPlaylist()
     this.shareUpload()
     const slot = this.current

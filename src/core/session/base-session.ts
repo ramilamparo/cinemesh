@@ -1,4 +1,5 @@
 import { randomInt } from 'node:crypto'
+import { join } from 'node:path'
 import { inspect } from 'node:util'
 import type { CorePaths } from '../../shared/ipc/control.js'
 import type {
@@ -28,7 +29,9 @@ import type { PeerTransferStats } from '../transfer/engine.js'
 import { FakePlayer } from './fake-player.js'
 import { mergePeerViews } from './peer-view.js'
 import { PeerWarningToasts } from './peer-warning-toasts.js'
+import { CodedError } from '../../shared/result.js'
 import { PlayerHolder } from './player-holder.js'
+import { SharedSubs, type SharedSubsOptions } from './shared-subs.js'
 import type { SessionFile } from './session-file.js'
 import {
   BusPortAdapter,
@@ -87,6 +90,8 @@ export abstract class BaseSession {
   protected stopped = false
   /** set synchronously when a leave starts, so async steps still running stand down */
   protected stopping = false
+  /** subtitle files members share while the room plays (ADR 0013) */
+  protected shared: SharedSubs | null = null
 
   /** A method, not the field: TS narrowing would otherwise keep `stopped` false across awaits. */
   protected isStopped(): boolean {
@@ -265,6 +270,62 @@ export abstract class BaseSession {
    */
   protected readerBlocked(): boolean {
     return false
+  }
+
+  // ---- shared subtitles (ADR 0013) -------------------------------------------------------------
+
+  /** Subclasses start it once their blobs exist; its files are served next to the session's metadata. */
+  protected createSharedSubs(
+    opts: Pick<SharedSubsOptions, 'fetch' | 'currentItem' | 'knownItem' | 'viewersMayShare'>,
+  ): SharedSubs {
+    const shared = new SharedSubs({
+      ...opts,
+      room: this.room,
+      dir: join(this.deps.paths.userData, 'wt', 'shared-subs', this.roomId),
+      addToPlayer: (spec, select) => {
+        void this.player?.addSubtitle(spec, select).catch((e: unknown) => {
+          this.deps.log.warn(`could not add the shared subtitle ${spec.title ?? ''}: ${String(e)}`)
+        })
+      },
+      onChange: (e) => this.deps.emit('sharedSubs', e),
+      notice: (n) => {
+        this.notice(n)
+        this.player?.osc('toast', { text: n.message })
+      },
+      log: {
+        debug: (m) => this.deps.log.debug(m),
+        info: (m) => this.deps.log.info(m),
+        warn: (m) => this.deps.log.warn(m),
+      },
+    })
+    this.shared = shared
+    return shared
+  }
+
+  private sharedSubs(): SharedSubs {
+    if (!this.shared) throw new CodedError('not-ready', 'The room is still opening')
+    return this.shared
+  }
+
+  /** subtitles.share */
+  shareSubtitle(path: string): Promise<{ hash: string }> {
+    return this.sharedSubs().share(path)
+  }
+
+  /** subtitles.remove */
+  removeSharedSubtitle(hash: string): Promise<void> {
+    return this.sharedSubs().remove(hash)
+  }
+
+  /** subtitles.use: selects a shared file in this member's player. */
+  async useSharedSubtitle(hash: string): Promise<void> {
+    const title = this.sharedSubs().titleOf(hash)
+    if (title === null) throw new CodedError('not-found', 'That subtitle is no longer shared')
+    const player = this.player
+    if (!player) throw new CodedError('no-player', 'The player is not running')
+    const track = player.tracks().sub.find((t) => t.external && t.title === title)
+    if (!track) throw new CodedError('not-ready', 'That subtitle is not in the player yet')
+    await player.setTrack('sub', track.id)
   }
 
   // ---- sync -----------------------------------------------------------------------------------
@@ -484,13 +545,24 @@ export abstract class BaseSession {
     try {
       for (const u of this.unsubs) u()
       this.stopSync()
+      await this.shared?.destroy()
       await this.player?.quit().catch(() => undefined)
       await this.player?.dispose().catch(() => undefined)
       this.clock.dispose()
       await this.file?.flush()
     } finally {
       // whatever failed above, the UI must not keep a dead room's state and the computer may sleep again
-      for (const e of ['peers', 'playback', 'sync', 'timeline', 'transfer', 'tracks', 'prepare', 'playlist'] as const) {
+      for (const e of [
+        'peers',
+        'playback',
+        'sync',
+        'timeline',
+        'transfer',
+        'tracks',
+        'prepare',
+        'playlist',
+        'sharedSubs',
+      ] as const) {
         this.deps.clearEvent(e)
       }
       this.deps.control.power(false)
